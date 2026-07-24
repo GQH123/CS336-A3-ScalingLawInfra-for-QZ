@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -67,6 +68,18 @@ INTERNAL_FAILURE_REASONS = frozenset(
     }
 )
 
+PUBLIC_FAILURE_DETAIL_REASONS = frozenset(
+    {
+        "timeout",
+        "numerical",
+        "resource",
+        "invalid_runtime_config",
+        "unknown_student_caused",
+    }
+)
+
+_PUBLIC_FAILURE_DETAIL_LIMIT = 4000
+
 
 @dataclass(frozen=True)
 class SubmitResponse:
@@ -96,6 +109,7 @@ class ExperimentResult:
     validation_losses: list[float]
     final_validation_loss: float | None
     failure_reason: str = ""
+    failure_detail: str = ""
     used_runtime_seconds: int | None = None
     completed_at: str = ""
     failed_at: str = ""
@@ -201,6 +215,7 @@ class _ExperimentState:
     final_validation_loss: float | None = None
     failure_reason: str = ""
     staff_failure_detail: str = ""
+    failure_detail: str = ""
     used_runtime_seconds: int | None = None
     completed_at: str = ""
     failed_at: str = ""
@@ -541,6 +556,7 @@ class ExperimentService:
             state.validation_losses = completed_losses
             state.final_validation_loss = final_loss
             state.status = ExperimentStatus.COMPLETED.value
+            state.failure_detail = ""
             charged_runtime = _clipped_runtime_charge(
                 payload.get("actual_runtime_seconds"),
                 reserved_runtime_seconds=state.reserved_runtime_seconds,
@@ -569,7 +585,12 @@ class ExperimentService:
             )
             state.failure_reason = failure_reason
             state.staff_failure_detail = _staff_failure_detail_from_mapping(payload)
+            state.failure_detail = _student_failure_detail_from_worker_payload(
+                payload,
+                failure_reason=failure_reason,
+            )
             if failure_reason in SYSTEM_FAILURE_REASONS:
+                state.failure_detail = ""
                 state.used_runtime_seconds = _clipped_system_runtime(
                     payload.get("actual_runtime_seconds"),
                     reserved_runtime_seconds=state.reserved_runtime_seconds,
@@ -977,6 +998,7 @@ class ExperimentService:
         state.status = ExperimentStatus.SYSTEM_FAILED.value
         state.failure_reason = failure_reason
         state.staff_failure_detail = staff_failure_detail
+        state.failure_detail = ""
         state.final_validation_loss = None
         state.used_runtime_seconds = (
             0 if state.used_runtime_seconds is None else state.used_runtime_seconds
@@ -1033,6 +1055,7 @@ class ExperimentService:
             state.status = ExperimentStatus.CANCELLED.value
             state.failure_reason = "provider_cancelled"
             state.staff_failure_detail = _provider_record_staff_failure_detail(record)
+            state.failure_detail = ""
             charged_runtime = _provider_terminal_runtime_charge(state)
             self._mark_experiment_terminal_failure(
                 state,
@@ -1050,6 +1073,7 @@ class ExperimentService:
             state.status = ExperimentStatus.FAILED.value
             state.failure_reason = "provider_failed_without_worker_callback"
             state.staff_failure_detail = _provider_record_staff_failure_detail(record)
+            state.failure_detail = _student_failure_detail_from_provider_record(record)
             charged_runtime = _provider_terminal_runtime_charge(state)
             self._mark_experiment_terminal_failure(
                 state,
@@ -1067,6 +1091,7 @@ class ExperimentService:
             state.status = ExperimentStatus.LOST.value
             state.failure_reason = "missing_worker_completed_callback"
             state.staff_failure_detail = _provider_record_staff_failure_detail(record)
+            state.failure_detail = _student_failure_detail_from_provider_record(record)
             charged_runtime = _provider_terminal_runtime_charge(state)
             self._mark_experiment_terminal_failure(
                 state,
@@ -1084,6 +1109,7 @@ class ExperimentService:
             state.status = ExperimentStatus.LOST.value
             state.failure_reason = "provider_lost"
             state.staff_failure_detail = _provider_record_staff_failure_detail(record)
+            state.failure_detail = ""
             charged_runtime = _provider_terminal_runtime_charge(state)
             self._mark_experiment_terminal_failure(
                 state,
@@ -1100,6 +1126,7 @@ class ExperimentService:
         state.status = record.status.value
         state.failure_reason = "provider_status_unknown"
         state.staff_failure_detail = _provider_record_staff_failure_detail(record)
+        state.failure_detail = ""
         charged_runtime = _provider_terminal_runtime_charge(state)
         self._mark_experiment_terminal_failure(
             state,
@@ -1516,6 +1543,7 @@ class ExperimentService:
             "experiments": [
                 {
                     **_experiment_admin_payload(state),
+                    "failure_detail": state.failure_detail,
                     "manifest": dict(state.manifest),
                 }
                 for state in self._experiments.values()
@@ -2048,6 +2076,90 @@ def _provider_snapshot_staff_failure_detail(snapshot: ProviderStatusSnapshot) ->
     )
 
 
+def _student_failure_detail_from_worker_payload(
+    payload: Mapping[str, Any],
+    *,
+    failure_reason: str,
+) -> str:
+    if failure_reason not in PUBLIC_FAILURE_DETAIL_REASONS:
+        return ""
+    return _sanitize_public_failure_detail(_staff_failure_detail_from_mapping(payload))
+
+
+def _student_failure_detail_from_provider_record(record: ExperimentRecord) -> str:
+    status_event = next(
+        (event for event in reversed(record.events) if event.type == "provider_status"),
+        None,
+    )
+    if status_event is None:
+        return ""
+    metadata = dict(status_event.metadata)
+    snapshot_metadata = metadata.get("snapshot_metadata")
+    if not isinstance(snapshot_metadata, Mapping):
+        return ""
+    lines = _string_list(snapshot_metadata.get("log_tail"))
+    if not _looks_like_worker_traceback_tail(lines):
+        return ""
+    return _sanitize_public_failure_detail("\n".join(lines))
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    lines: list[str] = []
+    for item in value:
+        line = str(item).strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _looks_like_worker_traceback_tail(lines: list[str]) -> bool:
+    text = "\n".join(lines).lower()
+    if "traceback (most recent call last):" in text:
+        return True
+    if "worker failed for " in text:
+        return True
+    return any(
+        re.search(r"\b[a-z_][a-z0-9_.]*(error|exception):", line, re.IGNORECASE)
+        for line in lines
+    )
+
+
+def _sanitize_public_failure_detail(detail: str) -> str:
+    text = str(detail or "").replace("\x00", "").strip()
+    if not text:
+        return ""
+    text = re.sub(
+        r"\bBearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer [redacted]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}", "[redacted-api-key]", text)
+    text = re.sub(
+        r"\b(token|secret|password|cookie)=([^\s;]+)",
+        r"\1=[redacted]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"/(?:secure|mnt/course-data|course-data|private)(?:/[^\s'\"<>)]*)?",
+        "[private-path]",
+        text,
+    )
+    text = re.sub(r"\b(?:api|backend)\.internal\b", "[internal-host]", text)
+    text = re.sub(
+        r"\b(?:provider-)?job-[0-9a-fA-F-]{8,}\b",
+        "[provider-job]",
+        text,
+    )
+    text = "\n".join(line.rstrip() for line in text.splitlines() if line.strip())
+    if len(text) > _PUBLIC_FAILURE_DETAIL_LIMIT:
+        return text[: _PUBLIC_FAILURE_DETAIL_LIMIT - 3].rstrip() + "..."
+    return text
+
+
 def _provider_failure_detail(
     *,
     provider_name: str,
@@ -2075,6 +2187,7 @@ def _result_from_state(state: _ExperimentState) -> ExperimentResult:
         validation_losses=list(state.validation_losses),
         final_validation_loss=state.final_validation_loss,
         failure_reason=state.failure_reason,
+        failure_detail=state.failure_detail,
         used_runtime_seconds=state.used_runtime_seconds,
         completed_at=state.completed_at,
         failed_at=state.failed_at,
@@ -2359,6 +2472,7 @@ def _experiment_state_from_payload(item: Mapping[str, Any]) -> _ExperimentState:
             str(item.get("failure_reason", ""))
         ),
         staff_failure_detail=str(item.get("staff_failure_detail", "")),
+        failure_detail=str(item.get("failure_detail", "")),
         used_runtime_seconds=(
             None
             if item.get("used_runtime_seconds") is None
