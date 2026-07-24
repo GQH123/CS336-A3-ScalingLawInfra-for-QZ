@@ -1,0 +1,717 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\PassOptionsToPackage{dvipsnames,svgnames,x11names}{xcolor}
+%
+\documentclass[
+]{ctexart}
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+\usepackage{listings}
+\usepackage{minted}
+\usepackage{etoolbox}
+\newcommand{\passthrough}[1]{#1}
+\lstset{defaultdialect=[5.3]Lua}
+\lstset{defaultdialect=[x86masm]Assembler}
+\definecolor{CodeBlockText}{HTML}{F8F8F2}
+\usemintedstyle{monokai}
+\AtBeginEnvironment{minted}{\color{CodeBlockText}}
+\BeforeBeginEnvironment{minted}{\vspace{-0.25\baselineskip}}
+\AfterEndEnvironment{minted}{\vspace{-0.35\baselineskip}}
+\renewcommand{\theFancyVerbLine}{\textcolor{Tan}{\scriptsize\arabic{FancyVerbLine}}}
+\setlength{\parskip}{4pt plus 1pt minus 1pt}
+\setminted{
+  bgcolor=Sepia,
+  frame=single,
+  framesep=3pt,
+  framerule=0.4pt,
+  formatcom=\color{CodeBlockText},
+  linenos,
+  numbersep=6pt,
+  breaklines,
+  breakanywhere,
+  fontsize=\small,
+  baselinestretch=0.96,
+  tabsize=4,
+  autogobble
+}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
+\fi
+\IfFileExists{bookmark.sty}{\usepackage{bookmark}}{\usepackage{hyperref}}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  colorlinks=true,
+  linkcolor={blue},
+  filecolor={Maroon},
+  citecolor={Blue},
+  urlcolor={blue},
+  pdfcreator={LaTeX via pandoc}}
+
+\title{Scaling Laws 项目 API 快速入门}
+\author{}
+\date{学生发布版草稿}
+
+\begin{document}
+\maketitle
+
+{
+\hypersetup{linkcolor=}
+\setcounter{tocdepth}{3}
+\tableofcontents
+}
+\hypertarget{scaling-laws-ux9879ux76ee-api-ux5febux901fux5165ux95e8}{%
+\section{Scaling Laws 项目 API
+快速入门}\label{scaling-laws-ux9879ux76ee-api-ux5febux901fux5165ux95e8}}
+
+状态：学生发布版草稿
+
+本文说明课程 API
+的公开调用方式和返回格式，涵盖查询预算、提交运行、轮询结果、整理数据和提交最终配置。课程团队会在项目开始前提供
+API 地址和个人 API key。
+
+项目发布包中包含英文和中文配套 Jupyter notebook，提供同一流程的可执行代码单元和响应示例。如果需要直接运行或复制代码，建议使用
+notebook 版本。
+
+\hypertarget{ux73afux5883ux51c6ux5907}{%
+\subsection{1. 环境准备}\label{ux73afux5883ux51c6ux5907}}
+
+先安装 Python\passthrough{\lstinline!requests!} 依赖：
+
+\begin{minted}{bash}
+python -m pip install requests
+\end{minted}
+
+设置 API 地址和个人 API key：
+
+\begin{minted}{python}
+import json
+import os
+import sys
+import time
+import requests
+
+API_BASE_URL = os.environ["SCALING_API_BASE_URL"].rstrip("/")
+API_KEY = os.environ["SCALING_API_KEY"]
+HEADERS = {"Authorization": f"Bearer {API_KEY}"}
+
+
+def api_request(method, path, **kwargs):
+    response = requests.request(
+        method,
+        f"{API_BASE_URL}{path}",
+        headers=HEADERS,
+        **kwargs,
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"raw_response": response.text}
+
+    if response.status_code == 409:
+        return body
+    if response.status_code < 200 or response.status_code >= 300:
+        print(
+            json.dumps(body, ensure_ascii=False, indent=2, sort_keys=True),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return body
+\end{minted}
+
+API key 是个人凭证。请勿分享，也不要提交到报告中。
+
+\hypertarget{ux67e5ux8be2ux9884ux7b97}{%
+\subsection{2. 查询预算}\label{ux67e5ux8be2ux9884ux7b97}}
+
+\begin{minted}{python}
+budget = api_request("GET", "/budget")
+budget
+\end{minted}
+
+响应示例：
+
+\begin{minted}{text}
+{
+  "student_id": "student-1",
+  "total_seconds": 43200,
+  "reserved_seconds": 0,
+  "charged_seconds": 0,
+  "remaining_seconds": 43200
+}
+\end{minted}
+
+预算以秒为单位返回。\passthrough{\lstinline!43200!} 秒等于 12 个官方
+accelerator-hours。
+
+\hypertarget{ux6784ux9020ux5c0fux578bux8badux7ec3ux914dux7f6e}{%
+\subsection{3.
+构造小型训练配置}\label{ux6784ux9020ux5c0fux578bux8badux7ec3ux914dux7f6e}}
+
+先用较小配置跑通流程，验证正确性和稳定性，再投入较多预算用于实际实验。
+
+\begin{minted}{python}
+config = {
+    "model": {
+        "num_hidden_layers": 2,
+        "hidden_size": 128,
+    },
+    "training": {
+        "train_tokens": 4096,
+        "num_evals": 1,
+        "learning_rate": 3e-4,
+    },
+}
+\end{minted}
+
+API 会填充文档中约定的默认值，例如序列长度、batch
+size、评估次数、优化器设置和 model
+seed。若出现模型维度不自洽、参数不满足整除约束、数值不是有限值，或请求超过剩余预算等问题，API
+会提前检查并拒绝提交。
+
+\hypertarget{ux8badux7ec3ux914dux7f6eux683cux5f0f}{%
+\subsection{4. 训练配置格式}\label{ux8badux7ec3ux914dux7f6eux683cux5f0f}}
+
+同一个训练配置对象会用于两个位置：
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!POST /submit!}：作为
+  \passthrough{\lstinline!config!} 提交；
+\item
+  \passthrough{\lstinline!POST /final\_submission!}：作为
+  \passthrough{\lstinline!training\_config!} 提交。
+\end{itemize}
+
+公开配置只包含两个顶层对象：
+
+\begin{minted}{python}
+config = {
+    "model": {
+        # 模型字段
+    },
+    "training": {
+        # 训练和优化器字段
+    },
+}
+\end{minted}
+
+请使用下面列出的公开字段。必填字段必须提供；可选字段可以省略，API
+会填充文档中约定的默认值。
+
+必填字段：
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!model.num\_hidden\_layers!}：正整数，Transformer
+  decoder block 的层数。在宽度不变时，增加层数通常会近似线性增加非
+  embedding 参数量和训练 FLOPs，因此它是 scaling-law sweep
+  中最主要的模型规模变量之一；
+\item
+  \passthrough{\lstinline!model.hidden\_size!}：正整数，residual
+  stream、token embedding、attention projection 以及 MLP
+  输入/输出的宽度。这是影响模型规模很强的结构变量；在层数固定时，attention
+  和 MLP 的参数量会随它大致二次增长。它还必须和下面的 attention head
+  布局兼容；
+\item
+  \passthrough{\lstinline!training.train\_tokens!}：正整数，本次训练要从固定课程数据顺序中消耗的训练
+  token 总数。worker 会按照确定性数据流读取前
+  \passthrough{\lstinline!training.train\_tokens!} 个
+  token；这个字段不会重新 shuffle 数据，也不表示 epoch
+  数。值越大，优化步和预算消耗通常越多；
+\item
+  \passthrough{\lstinline!training.learning\_rate!}：正有限浮点数，学习率
+  schedule 的峰值。使用 \passthrough{\lstinline!cosine!} 时，学习率会从
+  0 warm up 到该值，再衰减到
+  \passthrough{\lstinline!training.learning\_rate * training.final\_lr\_fraction!}
+  附近；使用 \passthrough{\lstinline!constant!}
+  时，训练全程使用该值。它需要和模型规模、batch size
+  一起调节：过大容易导致数值失败，过小会训练不足。
+\end{itemize}
+
+可选模型字段：
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!model.attention\_bias!}：布尔值，默认
+  \passthrough{\lstinline!false!}。启用后会在 attention projection
+  中加入可学习
+  bias。若要比较不同模型规模，建议保持该选项不变，避免参数量变化来自不相关的结构差异；
+\item
+  \passthrough{\lstinline!model.head\_dim!}：正整数，默认
+  \passthrough{\lstinline!model.hidden\_size / model.num\_attention\_heads!}。这是每个
+  attention head 的宽度。通常让 API 从
+  \passthrough{\lstinline!model.hidden\_size!} 和
+  \passthrough{\lstinline!model.num\_attention\_heads!}
+  推导即可；只有想显式检查 head 布局时才需要填写；
+\item
+  \passthrough{\lstinline!model.intermediate\_size!}：正整数，默认
+  \passthrough{\lstinline!4 * model.hidden\_size!}。这是
+  feed-forward/SwiGLU block 的中间宽度。它越大，非 embedding 参数量和
+  FLOPs 增加越明显；常见实验会把它固定为
+  \passthrough{\lstinline!model.hidden\_size!} 的某个倍数；
+\item
+  \passthrough{\lstinline!model.num\_attention\_heads!}：正整数，默认
+  \passthrough{\lstinline!1!}。这是 query attention head 的数量。在
+  \passthrough{\lstinline!model.hidden\_size!} 固定时，head 数越多，每个
+  head 的 \passthrough{\lstinline!model.head\_dim!}
+  越小；需要保证推导出的 head dimension 仍然兼容当前 GPU attention
+  后端；
+\item
+  \passthrough{\lstinline!model.num\_key\_value\_heads!}：正整数，默认等于
+  \passthrough{\lstinline!model.num\_attention\_heads!}。这个字段理论上控制
+  grouped-query attention，但当前 Stanford 参考运行时不支持
+  grouped-query attention，因此需要设置为和
+  \passthrough{\lstinline!model.num\_attention\_heads!} 相同；
+\item
+  \passthrough{\lstinline!model.rms\_norm\_eps!}：正有限浮点数，默认
+  \passthrough{\lstinline!1e-6!}。RMSNorm 中用于数值稳定的
+  epsilon。默认值来自参考 trainer；修改它通常属于优化/数值
+  ablation，而不是主要 scaling-law 变量；
+\item
+  \passthrough{\lstinline!model.rope\_theta!}：正整数，默认
+  \passthrough{\lstinline!1000000!}。RoPE rotary position embedding
+  的频率基数。除非你明确研究位置编码行为，否则建议保持默认；
+\item
+  \passthrough{\lstinline!model.tie\_word\_embeddings!}：布尔值，默认
+  \passthrough{\lstinline!false!}。为 \passthrough{\lstinline!true!}
+  时，输出分类器会复用输入 embedding
+  矩阵，从而减少参数量。若要直接比较多次运行，请保持这个选择一致；
+\item
+  \passthrough{\lstinline!model.dtype!}：可取
+  \passthrough{\lstinline!float32!}、\passthrough{\lstinline!bfloat16!}，默认
+  \passthrough{\lstinline!bfloat16!}。\passthrough{\lstinline!bfloat16!}
+  是常规 GPU 高效训练 dtype；\passthrough{\lstinline!float32!}
+  会占用更多显存和时间，主要用于数值对照；
+\item
+  \passthrough{\lstinline!model.vocab\_size!}：正整数，默认
+  \passthrough{\lstinline!50432!}。它必须满足 tokenized data
+  的要求。当前课程部署使用
+  \passthrough{\lstinline!EleutherAI/gpt-neox-20b!} token ID，要求至少为
+  \passthrough{\lstinline!50432!}；继续增大它会增加 embedding/output
+  参数，通常不代表本作业中有用的模型容量。
+\end{itemize}
+
+可选训练字段：
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!training.sequence\_length!}：正整数，默认
+  \passthrough{\lstinline!1024!}。每条训练样本/context window 的 token
+  数。它会影响显存，并和
+  \passthrough{\lstinline!training.train\_batch\_size!}
+  一起决定每个优化步的 token
+  数：\passthrough{\lstinline!training.sequence\_length * training.train\_batch\_size!}；
+\item
+  \passthrough{\lstinline!training.train\_batch\_size!}：正整数，默认
+  \passthrough{\lstinline!1!}。每个优化步包含的序列数。在
+  \passthrough{\lstinline!training.train\_tokens!} 固定时，batch
+  越大，优化步数越少，通常显存需求也越高；
+\item
+  \passthrough{\lstinline!training.validation\_batch\_size!}：正整数，默认
+  \passthrough{\lstinline!1!}。一次验证前向中包含的序列数。它不改变训练目标，但必须放得进显存，并满足验证
+  token 的整除约束；
+\item
+  \passthrough{\lstinline!training.num\_evals!}：正整数，默认
+  \passthrough{\lstinline!10!}。训练会被分成多少个 chunk 以及记录多少次
+  validation loss。worker 每个 chunk 训练
+  \passthrough{\lstinline!training.train\_tokens / training.num\_evals!}
+  个 token，然后做一次验证；最终验证损失是最后一个条目。很小的 smoke
+  test 通常只有少量优化步，应显式设为 \passthrough{\lstinline!1!}；
+\item
+  \passthrough{\lstinline!training.model\_seed!}：非负整数，默认
+  \passthrough{\lstinline!0!}。只控制模型初始化。课程数据顺序是固定的，因此改变该
+  seed 不会改变训练数据流；
+\item
+  \passthrough{\lstinline!training.optimizer!}：可取
+  \passthrough{\lstinline!adamw!}、\passthrough{\lstinline!sgd!}，默认
+  \passthrough{\lstinline!adamw!}。AdamW 是默认参考优化器；SGD
+  主要用于对照实验，通常需要单独调学习率；
+\item
+  \passthrough{\lstinline!training.lr\_schedule!}：可取
+  \passthrough{\lstinline!cosine!}、\passthrough{\lstinline!constant!}，默认
+  \passthrough{\lstinline!cosine!}。\passthrough{\lstinline!cosine!}
+  会使用 \passthrough{\lstinline!training.warmup\_fraction!} 和
+  \passthrough{\lstinline!training.final\_lr\_fraction!}；\passthrough{\lstinline!constant!}
+  会把学习率固定在 \passthrough{\lstinline!training.learning\_rate!}；
+\item
+  \passthrough{\lstinline!training.weight\_decay!}：非负有限浮点数，默认
+  \passthrough{\lstinline!0.0!}。AdamW 的 decoupled weight decay
+  强度。在参考运行时中 SGD 会忽略它。常见 AdamW baseline 会使用类似
+  \passthrough{\lstinline!0.01!} 的小值；
+\item
+  \passthrough{\lstinline!training.adam\_beta1!}：\passthrough{\lstinline![0, 1)!}
+  内的有限浮点数，默认 \passthrough{\lstinline!0.9!}。AdamW
+  一阶矩系数；SGD 会忽略它；
+\item
+  \passthrough{\lstinline!training.adam\_beta2!}：\passthrough{\lstinline![0, 1)!}
+  内的有限浮点数，默认 \passthrough{\lstinline!0.95!}。AdamW
+  二阶矩系数；SGD 会忽略它；
+\item
+  \passthrough{\lstinline!training.adam\_epsilon!}：正有限浮点数，默认
+  \passthrough{\lstinline!1e-8!}。AdamW denominator
+  epsilon，用于数值稳定；SGD 会忽略它；
+\item
+  \passthrough{\lstinline!training.warmup\_fraction!}：\passthrough{\lstinline![0, 1)!}
+  内的有限浮点数，默认 \passthrough{\lstinline!0.0!}。使用 cosine
+  schedule 时，有多少比例的优化步用于把学习率从 0 升到
+  \passthrough{\lstinline!training.learning\_rate!}；
+\item
+  \passthrough{\lstinline!training.final\_lr\_fraction!}：\passthrough{\lstinline![0, 1]!}
+  内的有限浮点数，默认 \passthrough{\lstinline!0.0!}。cosine schedule
+  结束时的学习率倍率。例如 \passthrough{\lstinline!0.1!}
+  表示最后学习率约为峰值的 10\%；
+\item
+  \passthrough{\lstinline!training.gradient\_clip\_norm!}：正有限浮点数，默认
+  \passthrough{\lstinline!1.0!}。全局 gradient norm clipping
+  阈值。较小的值可以稳定梯度尖峰，但如果大多数更新都被
+  clip，学习速度也可能变慢。
+\end{itemize}
+
+重要校验规则：
+
+\begin{itemize}
+\tightlist
+\item
+  如果显式提供 \passthrough{\lstinline!model.head\_dim!}，\passthrough{\lstinline!model.hidden\_size!}
+  必须等于
+  \passthrough{\lstinline!model.num\_attention\_heads * model.head\_dim!}。如果省略
+  \passthrough{\lstinline!model.head\_dim!}，\passthrough{\lstinline!model.hidden\_size!}
+  必须能被 \passthrough{\lstinline!model.num\_attention\_heads!}
+  整除，API 会派生 \passthrough{\lstinline!model.head\_dim!}；
+\item
+  \passthrough{\lstinline!model.num\_attention\_heads!} 必须能被
+  \passthrough{\lstinline!model.num\_key\_value\_heads!}
+  整除；当前 Stanford 参考运行时还要求
+  \passthrough{\lstinline!model.num\_key\_value\_heads == model.num\_attention\_heads!}，因为不支持
+  grouped-query attention；
+\item
+  \passthrough{\lstinline!model.head\_dim!} 必须
+  \passthrough{\lstinline!<= 128!} 且是 \passthrough{\lstinline!8!}
+  的倍数，才能兼容当前 GPU attention 后端。例如
+  \passthrough{\lstinline!model.hidden\_size: 2048!} 时设置
+  \passthrough{\lstinline!model.num\_attention\_heads: 16!}，得到
+  \passthrough{\lstinline!model.head\_dim: 128!}；
+\item
+  \passthrough{\lstinline!model.intermediate\_size!} 必须大于或等于
+  \passthrough{\lstinline!model.hidden\_size!}；
+\item
+  对当前 \passthrough{\lstinline!EleutherAI/gpt-neox-20b!} tokenized
+  dataset，\passthrough{\lstinline!model.vocab\_size!} 必须至少是
+  \passthrough{\lstinline!50432!}。更小的 vocabulary 可能让 token ID
+  超出 embedding table，因此会被拒绝；
+\item
+  当课程 worker 使用 \passthrough{\lstinline!worker\_gpu\_count > 1!}
+  的多 GPU 配置时，Stanford FSDP 参数分片还要求
+  \passthrough{\lstinline!model.hidden\_size!} 和
+  \passthrough{\lstinline!model.intermediate\_size!} 能被
+  \passthrough{\lstinline!worker\_gpu\_count!} 整除。如果
+  \passthrough{\lstinline!model.tie\_word\_embeddings!} 为
+  \passthrough{\lstinline!false!}，
+  \passthrough{\lstinline!model.vocab\_size!} 也必须能被
+  \passthrough{\lstinline!worker\_gpu\_count!} 整除；
+\item
+  \passthrough{\lstinline!training.train\_tokens!} 必须能被
+  \passthrough{\lstinline!training.sequence\_length * training.train\_batch\_size!}
+  整除；
+\item
+  \passthrough{\lstinline!training.train\_tokens!} 最大为
+  \passthrough{\lstinline!500000000000!}；
+\item
+  总优化步数等于 \passthrough{\lstinline!training.train\_tokens!} 除以
+  \passthrough{\lstinline!training.sequence\_length * training.train\_batch\_size!}；
+\item
+  总优化步数必须能被
+  \passthrough{\lstinline!training.num\_evals!} 整除；
+\item
+  验证 batch 必须和课程验证 token 设置兼容；不兼容的
+  \passthrough{\lstinline!training.sequence\_length!} 或
+  \passthrough{\lstinline!training.validation\_batch\_size!} 会被拒绝；
+\item
+  当课程 worker 使用 \passthrough{\lstinline!worker\_gpu\_count > 1!}
+  的多 GPU 配置时，
+  \passthrough{\lstinline!training.train\_batch\_size!} 和
+  \passthrough{\lstinline!training.validation\_batch\_size!} 必须能被
+  \passthrough{\lstinline!worker\_gpu\_count!} 整除，因为 Stanford
+  trainer 会沿 FSDP mesh 对 batch axis 分片；
+\item
+  所有数值字段都必须是有限值；文档标注为正数的字段必须严格大于 0。特别是
+  \passthrough{\lstinline!training.learning\_rate!} 必须是正有限值；
+\item
+  不支持的顶层字段、\passthrough{\lstinline!model!} 字段或
+  \passthrough{\lstinline!training!}
+  字段都会被拒绝。旧模型字段名不再接受，这可以帮助你在实验开始前发现拼写错误，避免配置被静默改成默认行为。
+\end{itemize}
+
+如果最终提交中的配置无法通过这些检查，API 会返回
+\passthrough{\lstinline!invalid\_final\_submission!}，并且不会保存该最终提交。
+
+\hypertarget{ux63d0ux4ea4ux8fd0ux884c}{%
+\subsection{5. 提交运行}\label{ux63d0ux4ea4ux8fd0ux884c}}
+
+\begin{minted}{python}
+submit_result = api_request(
+    "POST",
+    "/submit",
+    json={
+        "config": config,
+        "requested_runtime_seconds": 300,
+    },
+)
+submit_result
+\end{minted}
+
+成功响应示例：
+
+\begin{minted}{text}
+{
+  "experiment_id": "exp-000001",
+  "status": "queued",
+  "budget_reserved_seconds": 300,
+  "resource_warnings": [
+    "very_low_optimizer_steps"
+  ],
+  "resolved_config": {
+    "parameter_count_estimate": 4260096,
+    "tokens_per_optimizer_step": 1024,
+    "total_optimizer_steps": 4,
+    "resource_warnings": [
+      "very_low_optimizer_steps"
+    ]
+  }
+}
+\end{minted}
+
+排队中和运行中的任务会先预留完整请求时间。如果运行提前结束，未使用的预留预算会按规则返还。\passthrough{\lstinline!resource\_warnings!}
+只是提醒，不会导致提交被拒绝。
+
+重复提交响应示例：
+
+\begin{minted}{text}
+{
+  "error": "duplicate_config",
+  "message": "An identical configuration was already submitted.",
+  "experiment_id": "exp-000001"
+}
+\end{minted}
+
+重复检测只在你自己的 API key 范围内进行，不会访问到其他人的 experiment
+ID 或配置。
+
+\hypertarget{ux8f6eux8be2ux8fd0ux884cux72b6ux6001}{%
+\subsection{6.
+轮询运行状态}\label{ux8f6eux8be2ux8fd0ux884cux72b6ux6001}}
+
+\begin{minted}{python}
+experiment_id = submit_result["experiment_id"]
+terminal_statuses = {"completed", "failed", "cancelled", "system_failed"}
+
+while True:
+    experiment = api_request("GET", f"/experiment/{experiment_id}")
+    status = experiment["status"]
+    print("status:", status)
+
+    if status in terminal_statuses:
+        break
+
+    time.sleep(30)
+\end{minted}
+
+完成响应示例：
+
+\begin{minted}{text}
+{
+  "experiment_id": "exp-000001",
+  "status": "completed",
+  "validation_losses": [4.2, 3.7],
+  "final_validation_loss": 3.7,
+  "failure_reason": "",
+  "used_runtime_seconds": 180,
+  "completed_at": "2026-07-16T15:00:00Z",
+  "failed_at": "",
+  "resource_warnings": []
+}
+\end{minted}
+
+对于 completed 运行，使用
+\passthrough{\lstinline!final\_validation\_loss!}
+作为该次运行的结果。\passthrough{\lstinline!used\_runtime\_seconds!}
+是按运行时间规则计算出的计费时间。
+\passthrough{\lstinline!validation\_losses!}
+是训练过程中多次验证评估得到的有序历史，不是置信区间，也不是
+\passthrough{\lstinline![lower, upper]!}。对于 completed
+运行，\passthrough{\lstinline!final\_validation\_loss!} 等于
+\passthrough{\lstinline!validation\_losses!} 的最后一个值。
+
+失败响应示例：
+
+\begin{minted}{text}
+{
+  "experiment_id": "exp-000002",
+  "status": "failed",
+  "validation_losses": [4.6, 4.1],
+  "final_validation_loss": null,
+  "failure_reason": "timeout",
+  "used_runtime_seconds": 600,
+  "completed_at": "",
+  "failed_at": "2026-07-16T15:00:00Z",
+  "resource_warnings": []
+}
+\end{minted}
+
+失败运行中的部分验证损失只是诊断信息，仅供调试参考，不是最终验证损失，也不应当作
+completed 运行的结果使用。
+
+\hypertarget{ux6c47ux603bux5e76ux4fddux5b58ux7ed3ux679c}{%
+\subsection{7.
+汇总并保存结果}\label{ux6c47ux603bux5e76ux4fddux5b58ux7ed3ux679c}}
+
+\begin{minted}{python}
+experiments = api_request("GET", "/experiments")["experiments"]
+
+rows = []
+for exp in experiments:
+    rows.append(
+        {
+            "experiment_id": exp["experiment_id"],
+            "status": exp["status"],
+            "final_loss": (
+                exp["final_validation_loss"]
+                if exp["status"] == "completed"
+                else None
+            ),
+            "validation_losses": exp["validation_losses"],
+            "used_runtime_seconds": exp["used_runtime_seconds"],
+        }
+    )
+\end{minted}
+
+建议维护实验日志，记录每次运行的目的、它检验的 scaling-law
+假设，以及结果如何影响下一步实验决策。请确保你提交的配置能够稳定运行训练，由于配置鲁棒性等问题导致的训练崩溃会使最终得分计为无效。
+
+\hypertarget{ux63d0ux4ea4ux6700ux7ec8ux914dux7f6e}{%
+\subsection{8.
+提交最终配置}\label{ux63d0ux4ea4ux6700ux7ec8ux914dux7f6e}}
+
+最终提交包括训练配置、预测最终损失和预测区间。API 提前检测出的无效配置会返回
+\passthrough{\lstinline!invalid\_final\_submission!}，且不会被保存。
+
+\begin{minted}{python}
+final_submission = api_request(
+    "POST",
+    "/final_submission",
+    json={
+        "training_config": config,
+        "predicted_final_loss": 3.25,
+        "predicted_final_loss_lower": 3.18,
+        "predicted_final_loss_upper": 3.36,
+    },
+)
+final_submission
+\end{minted}
+
+响应示例：
+
+\begin{minted}{text}
+{
+  "student_id": "student-1",
+  "training_config": {
+    "model": {"num_hidden_layers": 2, "hidden_size": 128},
+    "training": {"train_tokens": 4096, "num_evals": 1, "learning_rate": 0.0003}
+  },
+  "predicted_final_loss": 3.25,
+  "predicted_final_loss_lower": 3.18,
+  "predicted_final_loss_upper": 3.36,
+  "updated_at": "2026-07-16T15:00:00Z",
+  "frozen_at": "",
+  "frozen_by": "",
+  "freeze_reason": ""
+}
+\end{minted}
+
+你可以在截止时间前多次提交。截止日期前最后一次有效最终提交会被用作最终评测的配置使用。
+
+可以通过如下 API 确认当前提交的最终配置：
+
+\begin{minted}{python}
+final_submission = api_request("GET", "/final_submission")
+final_submission
+\end{minted}
+
+超过截止日期后，该接口会返回冻结记录，并填充
+\passthrough{\lstinline!frozen\_at!}、\passthrough{\lstinline!frozen\_by!}
+和 \passthrough{\lstinline!freeze\_reason!}。
+
+\hypertarget{ux5e38ux89c1ux9519ux8bef}{%
+\subsection{9. 常见错误}\label{ux5e38ux89c1ux9519ux8bef}}
+
+API key 无效：
+
+\begin{minted}{text}
+{
+  "error": "invalid_api_key",
+  "message": "Invalid or missing API key."
+}
+\end{minted}
+
+配置无效：
+
+\begin{minted}{text}
+{
+  "error": "invalid_config",
+  "message": "model.hidden_size must be divisible by model.num_attention_heads"
+}
+\end{minted}
+
+尚未提交最终配置：
+
+\begin{minted}{text}
+{
+  "error": "final_submission_not_found",
+  "message": "Final submission not found."
+}
+\end{minted}
+
+如有更多问题，欢迎随时联系课程团队。
+
+\end{document}

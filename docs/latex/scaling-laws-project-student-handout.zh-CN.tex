@@ -1,0 +1,681 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\PassOptionsToPackage{dvipsnames,svgnames,x11names}{xcolor}
+%
+\documentclass[
+  11pt,
+]{ctexart}
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+\usepackage{listings}
+\usepackage{minted}
+\usepackage{etoolbox}
+\newcommand{\passthrough}[1]{#1}
+\lstset{defaultdialect=[5.3]Lua}
+\lstset{defaultdialect=[x86masm]Assembler}
+\definecolor{CodeBlockText}{HTML}{F8F8F2}
+\usemintedstyle{monokai}
+\AtBeginEnvironment{minted}{\color{CodeBlockText}}
+\BeforeBeginEnvironment{minted}{\vspace{-0.25\baselineskip}}
+\AfterEndEnvironment{minted}{\vspace{-0.35\baselineskip}}
+\renewcommand{\theFancyVerbLine}{\textcolor{Tan}{\scriptsize\arabic{FancyVerbLine}}}
+\setlength{\parskip}{4pt plus 1pt minus 1pt}
+\setminted{
+  bgcolor=Sepia,
+  frame=single,
+  framesep=3pt,
+  framerule=0.4pt,
+  formatcom=\color{CodeBlockText},
+  linenos,
+  numbersep=6pt,
+  breaklines,
+  breakanywhere,
+  fontsize=\small,
+  baselinestretch=0.96,
+  tabsize=4,
+  autogobble
+}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
+\fi
+\IfFileExists{bookmark.sty}{\usepackage{bookmark}}{\usepackage{hyperref}}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  colorlinks=true,
+  linkcolor={blue},
+  filecolor={Maroon},
+  citecolor={Blue},
+  urlcolor={blue},
+  pdfcreator={LaTeX via pandoc}}
+
+\title{项目：语言模型训练的 Scaling Laws}
+\author{}
+\date{学生发布版草稿}
+
+\begin{document}
+\maketitle
+
+{
+\hypersetup{linkcolor=}
+\setcounter{tocdepth}{3}
+\tableofcontents
+}
+\hypertarget{ux9879ux76eeux8bedux8a00ux6a21ux578bux8badux7ec3ux7684-scaling-laws}{%
+\section{项目：语言模型训练的 Scaling
+Laws}\label{ux9879ux76eeux8bedux8a00ux6a21ux578bux8badux7ec3ux7684-scaling-laws}}
+
+状态：学生发布版草稿
+
+\hypertarget{ux9879ux76eeux6982ux8ff0}{%
+\subsection{1. 项目概述}\label{ux9879ux76eeux6982ux8ff0}}
+
+本项目将带你实际体验语言模型预训练中的 scaling
+laws。你的目标是在有限实验预算下，预测模型验证损失会如何随着模型规模、数据规模、优化器设置和训练计算量的变化而变化。
+
+Scaling laws 的价值在于，大规模训练过于昂贵，无法完全依靠试错探索。好的
+scaling-law
+研究会把较小规模运行作为实验证据，再判断哪些模式足够稳定，可以外推到更大的计算预算。本项目要求你在真实预算约束下做这些判断和权衡：每次探索性运行都会消耗时间，但在设计良好的策略下，这些运行都应当为最优配置提供有效信息。
+
+具体来说，你需要向项目 API
+提交训练配置，课程基础设施会使用固定的预训练基础设施和一致的、由课程团队控制的硬件环境运行真实的语言模型训练任务。API
+会返回你的探索性训练任务对应的验证损失。
+
+项目结束时，你需要提交一个最终训练配置，用于一次更大预算的预训练运行。同时，你还需要提交自己预测的最终验证损失，以及一个不确定性区间。你的成绩会同时取决于最终模型的实际验证损失，以及你的预测质量。
+
+本项目的核心问题是：
+
+\begin{quote}
+在固定训练计算预算下，我们应该如何权衡模型规模、训练 token
+数量和超参数，才能获得最低验证损失？
+\end{quote}
+
+因此，本项目既考察计算预算下的配置优化，也考察如何根据有限实验结果做出可靠外推。你不仅要寻找好的最终配置，也要决定哪些探索性实验能让你的最终预测更有效和可信。
+
+\hypertarget{ux5b66ux4e60ux76eeux6807}{%
+\subsection{2. 学习目标}\label{ux5b66ux4e60ux76eeux6807}}
+
+完成本项目后，你应该能够：
+
+\begin{itemize}
+\tightlist
+\item
+  解释语言模型 scaling 中模型规模与数据规模之间的权衡；
+\item
+  设计小规模实验，用于外推更大规模训练结果；
+\item
+  拟合并批判性分析经验 scaling-law 模型；
+\item
+  理解外推预测中的不确定性；
+\item
+  在计算预算约束下选择模型结构和优化器超参数；
+\item
+  区分已完成运行、失败运行、部分诊断信息和最终成绩；
+\item
+  写出可复现实验方法的 scaling-law 项目报告。
+\end{itemize}
+
+\hypertarget{ux9879ux76eeux7ed3ux6784}{%
+\subsection{3. 项目结构}\label{ux9879ux76eeux7ed3ux6784}}
+
+本项目分为两个阶段。
+
+第一阶段用于探索性实验、证据收集和 scaling-law 建模。第二阶段是一次最终预训练运行，用来检验你的分析所产生的最终配置和预测。
+
+\hypertarget{ux9636ux6bb5ux4e00ux63a2ux7d22ux6027-scaling-law-ux5b9eux9a8c}{%
+\subsubsection{阶段一：探索性 Scaling-Law
+实验}\label{ux9636ux6bb5ux4e00ux63a2ux7d22ux6027-scaling-law-ux5b9eux9a8c}}
+
+每位学生拥有探索性实验预算：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{12 个 accelerator-hours}
+\end{itemize}
+
+你可以使用该预算向课程 API
+提交训练配置。每个被接受的实验都会进入队列，并由课程基础设施运行。API
+会报告实验状态和验证损失。
+
+你应当利用这些探索性运行来决定：
+
+\begin{itemize}
+\tightlist
+\item
+  尝试哪些模型规模；
+\item
+  使用多少训练 token；
+\item
+  如何在不同实验之间分配计算量；
+\item
+  哪些优化器和学习率设置是稳定的；
+\item
+  哪种 scaling-law 拟合方法更可信；
+\item
+  你的外推预测有多大的不确定性。
+\end{itemize}
+
+探索性运行不一定要很大才有价值。小运行可以验证配置是否合法、损失是否有限、运行时间如何随配置变化。较大的探索运行则应当用于降低外推误差，或区分多个互相竞争的
+scaling-law 拟合。
+
+\hypertarget{ux9636ux6bb5ux4e8cux9690ux85cfux9884ux7b97ux6700ux7ec8ux8fd0ux884c}{%
+\subsubsection{阶段二：最终预训练运行}\label{ux9636ux6bb5ux4e8cux9690ux85cfux9884ux7b97ux6700ux7ec8ux8fd0ux884c}}
+
+项目结束时，你需要提交一个你认为最优的训练配置，用于最终预训练运行：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{48 个 accelerator-hours}
+\end{itemize}
+
+你还需要提交：
+
+\begin{itemize}
+\tightlist
+\item
+  你预测的最终验证损失；
+\item
+  预测区间的下界；
+\item
+  预测区间的上界。
+\end{itemize}
+
+截止时间后，课程团队会冻结每位学生最后一次有效的最终提交。最终运行将由课程基础设施统一启动。最终验证损失会在结果发布前保持隐藏。
+
+\hypertarget{ux5b98ux65b9ux8ba1ux7b97ux4e0eux786cux4ef6ux653fux7b56}{%
+\subsection{4.
+计算与硬件政策}\label{ux5b98ux65b9ux8ba1ux7b97ux4e0eux786cux4ef6ux653fux7b56}}
+
+本项目使用 accelerator-hours
+表示预算，不公开具体硬件型号。课程保证探索运行和最终运行使用一致的、由课程团队控制的硬件类型和训练栈。
+
+只有课程 API 运行的实验结果会被计入本项目的实验证据集合。你不应使用私有 GPU
+或本地训练运行来获得额外的实验证据。该规则用于保证不同硬件条件的学生之间的公平性。
+
+你可以使用本地计算资源完成普通分析任务，例如：
+
+\begin{itemize}
+\tightlist
+\item
+  拟合 scaling-law 曲线；
+\item
+  绘制图表；
+\item
+  运行 notebook；
+\item
+  处理自己的实验日志；
+\item
+  撰写报告。
+\end{itemize}
+
+\hypertarget{ux6570ux636eux4e0eux8bc4ux4f30ux653fux7b56}{%
+\subsection{5.
+数据与评估政策}\label{ux6570ux636eux4e0eux8bc4ux4f30ux653fux7b56}}
+
+训练数据由课程团队准备。数据来自公开来源，但具体数据集混合、预处理方式、tokenized
+顺序和最终评估划分在结果发布前不会公开。
+
+所有探索性运行都使用固定的 tokenized
+数据顺序。\passthrough{\lstinline!model\_seed!}
+控制模型初始化，不控制数据顺序。
+
+探索性运行会报告探索阶段验证评估数据集上的验证损失。最终排行榜评分会使用更大的
+held-out
+验证评估数据集。
+
+由于所有学生使用严格控制的确定性训练基础设施和数据管线，你的各次运行之间的验证损失具有一定可比性。不过，这些损失仍然来自有限训练运行，因此分析时应考虑失败运行、训练不稳定性，以及短运行和小规模运行可能无法揭示大预算下的预训练行为这一事实。
+
+\hypertarget{ux8badux7ec3ux914dux7f6e}{%
+\subsection{6. 训练配置}\label{ux8badux7ec3ux914dux7f6e}}
+
+每次实验提交都包含一个训练配置。API
+快速入门的训练配置格式部分会给出公开配置所支持的字段，主要包括以下几类参数。
+
+\hypertarget{ux6a21ux578bux7ed3ux6784ux914dux7f6e}{%
+\subsubsection{模型结构配置}\label{ux6a21ux578bux7ed3ux6784ux914dux7f6e}}
+
+你将配置一个 dense decoder-only Transformer 模型。可配置参数包括：
+
+\begin{itemize}
+\tightlist
+\item
+  Transformer 层数；
+\item
+  hidden size；
+\item
+  attention head 数量；
+\item
+  head dimension；
+\item
+  feedforward/intermediate size；
+\item
+  normalization 设置；
+\item
+  RoPE 设置；
+\item
+  embedding tying；
+\item
+  支持情况下的 dtype；
+\item
+  支持情况下的 vocabulary size。
+\end{itemize}
+
+API 快速入门是字段清单的权威参考。当前 schema 支持
+\passthrough{\lstinline!model.head\_dim!} 作为模型字段。如果省略它，API
+会从
+\passthrough{\lstinline!model.hidden\_size / model.num\_attention\_heads!}
+派生；如果显式提供它，\passthrough{\lstinline!model.hidden\_size!}
+必须等于
+\passthrough{\lstinline!model.num\_attention\_heads * model.head\_dim!}。
+
+\hypertarget{ux4f18ux5316ux5668ux914dux7f6e}{%
+\subsubsection{优化器配置}\label{ux4f18ux5316ux5668ux914dux7f6e}}
+
+API 支持固定的优化器族和学习率调度。参数包括：
+
+\begin{itemize}
+\tightlist
+\item
+  优化器类型；
+\item
+  峰值学习率；
+\item
+  warmup 比例；
+\item
+  最终学习率比例；
+\item
+  weight decay；
+\item
+  适用情况下的 beta 值；
+\item
+  适用情况下的 epsilon 值；
+\item
+  适用情况下的 gradient clipping。
+\end{itemize}
+
+\hypertarget{ux8badux7ec3ux914dux7f6e-1}{%
+\subsubsection{训练配置}\label{ux8badux7ec3ux914dux7f6e-1}}
+
+训练参数包括：
+
+\begin{itemize}
+\tightlist
+\item
+  训练 batch size；
+\item
+  验证 batch size；
+\item
+  验证评估次数；
+\item
+  总训练 token 数；
+\item
+  模型随机种子。
+\end{itemize}
+
+最大运行时间预留通过 \passthrough{\lstinline!POST /submit!} 请求中的
+\passthrough{\lstinline!requested\_runtime\_seconds!}
+提交，不属于训练配置对象本身。
+
+如果配置不符合字段格式或模型结构约束，API
+会拒绝提交。对于风险较高的配置，API
+也可能返回资源警告；但这些警告只是提醒，不一定表示配置无效。
+
+配置不仅决定训练哪个模型，也决定你能从一次运行中获得多少证据。例如，增大模型规模可能提高容量，但会减少固定运行时间内可完成的优化步数；增加训练
+token
+可能让模型更充分利用数据，但也可能让运行超出请求的时间预留。应将每个配置视为一个关于计算分配的假设。
+
+\hypertarget{api-ux5de5ux4f5cux6d41}{%
+\subsection{7. API 工作流}\label{api-ux5de5ux4f5cux6d41}}
+
+课程团队会提供 API 地址、快速入门文档并分发每位学生的 API key。
+
+所有 API 请求都应在请求头中包含你的 API key。API key
+是个人凭证，请勿分享。
+
+公开 API 端点包括：
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!GET /budget!}
+\item
+  \passthrough{\lstinline!POST /submit!}
+\item
+  \passthrough{\lstinline!GET /experiments!}
+\item
+  \passthrough{\lstinline!GET /experiment/\{experiment\_id\}!}
+\item
+  \passthrough{\lstinline!POST /final\_submission!}
+\item
+  \passthrough{\lstinline!GET /final\_submission!}
+\end{itemize}
+
+API 快速入门提供实用 Python 示例和响应样例。
+
+\hypertarget{ux5178ux578bux5de5ux4f5cux6d41}{%
+\subsubsection{典型工作流}\label{ux5178ux578bux5de5ux4f5cux6d41}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  使用 \passthrough{\lstinline!GET /budget!} 检查剩余预算。
+\item
+  使用 \passthrough{\lstinline!POST /submit!} 提交训练配置。
+\item
+  使用 \passthrough{\lstinline!GET /experiment/\{experiment\_id\}!}
+  轮询实验状态。
+\item
+  记录已完成运行的验证损失。
+\item
+  使用收集到的结果拟合 scaling laws。
+\item
+  使用 \passthrough{\lstinline!POST /final\_submission!}
+  提交最终配置和预测损失。
+\item
+  使用 \passthrough{\lstinline!GET /final\_submission!}
+  确认当前最终提交。
+\end{enumerate}
+
+\hypertarget{ux9884ux7b97ux8ba1ux7b97}{%
+\subsection{8. 预算计算}\label{ux9884ux7b97ux8ba1ux7b97}}
+
+排队中和运行中的实验会预留完整的
+\passthrough{\lstinline!requested\_runtime\_seconds!}。
+
+实验结束后，系统会根据最终实验状态更新预算使用情况。
+
+一般规则如下：
+
+\begin{itemize}
+\tightlist
+\item
+  API 解析相关参数后认定的无效请求会被拒绝，不会计算费用；
+\item
+  同一学生重复提交完全相同的配置不会再次计费，也不会再次运行，而是直接返回上次运行结果。
+\item
+  排队中和运行中的任务会预留完整请求时间；
+\item
+  已完成任务按实际运行时间计费，不超过请求的最大运行时间；
+\item
+  训练超时按完整预留时间计费；
+\item
+  数值不稳定和训练崩溃等情况按实际运行时间计费，不超过请求的最大运行时间；
+\item
+  基础设施故障可由课程团队复核，并按照情况返还预算。
+\end{itemize}
+
+如果你预留的运行时间超过实验实际需要的时间，未使用的预留时间会在运行完成后返还。
+
+\hypertarget{ux5b9eux9a8cux72b6ux6001}{%
+\subsection{9. 实验状态}\label{ux5b9eux9a8cux72b6ux6001}}
+
+实验可能具有以下状态：
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!queued!}
+\item
+  \passthrough{\lstinline!running!}
+\item
+  \passthrough{\lstinline!completed!}
+\item
+  \passthrough{\lstinline!failed!}
+\item
+  \passthrough{\lstinline!cancelled!}
+\item
+  \passthrough{\lstinline!system\_failed!}
+\end{itemize}
+
+已完成实验会包含一组验证损失。对于已完成实验，最终验证损失是该列表中的最后一个值。
+
+失败的探索性运行可能包含部分验证损失。这些部分损失是有用的诊断信息，但不是最终验证损失，也不应被当作已完成运行的结果使用。
+
+失败原因可能包括 timeout、数值不稳定、资源失败或其他运行时失败。课程 API
+会尽可能提供结构化失败类别。
+
+\hypertarget{ux6700ux7ec8ux63d0ux4ea4}{%
+\subsection{10. 最终提交}\label{ux6700ux7ec8ux63d0ux4ea4}}
+
+你的最终提交包含：
+
+\begin{itemize}
+\tightlist
+\item
+  最终训练配置；
+\item
+  预测的最终验证损失；
+\item
+  预测区间下界；
+\item
+  预测区间上界。
+\end{itemize}
+
+你可以在截止时间前重新提交。第一阶段结束后，截止时间前最后一次有效提交会被冻结，并用于最终预训练运行。
+API 会在保存前校验最终训练配置。无效配置会返回
+\passthrough{\lstinline!invalid\_final\_submission!}，且不能被冻结。
+
+预测区间应当反映你对最终验证损失的真实不确定性。例如，如果你的点预测是
+\passthrough{\lstinline!2.73!}，并且根据 scaling-law
+拟合不确定性和模型选择风险，你认为合理范围是
+\passthrough{\lstinline![2.69, 2.79]!}，那么可以提交这个区间作为预测不确定性的范围。
+
+评分时，课程团队默认把该区间解释为一个 80\% 中心预测区间。
+
+API 只记录你的预测，不会替你生成或调整预测。
+
+\hypertarget{ux63d0ux4ea4ux5185ux5bb9}{%
+\subsection{11. 提交内容}\label{ux63d0ux4ea4ux5185ux5bb9}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{最终 API 提交}
+
+  \begin{itemize}
+  \tightlist
+  \item
+    最终训练配置；
+  \item
+    预测的最终验证损失；
+  \item
+    预测区间下界和上界。
+  \end{itemize}
+\item
+  \textbf{方法报告}
+
+  \begin{itemize}
+  \tightlist
+  \item
+    实验设计说明；
+  \item
+    用于拟合的运行实验证据列表；
+  \item
+    你拟合的 scaling-law 模型；
+  \item
+    支持外推的图表；
+  \item
+    residuals 或其他拟合质量诊断；
+  \item
+    最终模型规模和数据规模选择的解释；
+  \item
+    优化器和超参数选择的解释；
+  \item
+    不确定性讨论；
+  \item
+    局限性和可能的失败模式。
+  \end{itemize}
+\item
+  \textbf{分析代码}
+
+  \begin{itemize}
+  \tightlist
+  \item
+    用于收集、清洗、拟合和绘图的代码；
+  \item
+    代码应足以从你的 API 结果复现报告中的分析。
+  \end{itemize}
+\end{enumerate}
+
+具体提交平台和文件格式将由课程团队后续公布。
+
+你的报告应当让推理过程可审计、可验证。应能看出你使用了哪些运行，哪些运行被排除或降低权重，你拟合了什么模型，以及最终配置为什么由这些证据推出。
+
+\hypertarget{ux8bc4ux5206}{%
+\subsection{12. 评分}\label{ux8bc4ux5206}}
+
+默认评分权重：
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{60\%} 最终预训练运行的验证损失；
+\item
+  \textbf{20\%} 预测质量；
+\item
+  \textbf{20\%} 方法报告和分析可复现性。
+\end{itemize}
+
+预测质量使用明确的预测惩罚计算，惩罚越低越好。记最终运行的实际验证损失为
+\(L\)，你的点预测为 \(\hat{L}\)，预测区间为 \([L_-, L_+]\)。有效预测必须为有限数值，并满足
+\[
+L_- \le \hat{L} \le L_+.
+\]
+
+预测质量由两部分组成：
+
+\begin{itemize}
+\tightlist
+\item
+  点预测误差：
+  \[
+  E_{\text{point}} = |\hat{L} - L|.
+  \]
+\item
+  区间惩罚：
+  \[
+  S_{\text{interval}}
+  =
+  (L_+ - L_-)
+  + 10 \max(0, L_- - L)
+  + 10 \max(0, L - L_+).
+  \]
+\end{itemize}
+
+其中，\((L_+ - L_-)\) 是区间宽度惩罚；如果真实损失落在区间外，超出区间的距离会被额外乘以
+10。系数 10 来自 80\% 中心预测区间的标准 interval score，即
+\(2 / 0.2 = 10\)。
+
+预测质量的原始惩罚为：
+\[
+S_{\text{pred}}
+=
+0.5 E_{\text{point}}
++
+0.5 S_{\text{interval}}.
+\]
+
+因此，较宽的区间并不会自动更好：它可能更容易覆盖真实结果，但会直接增加宽度惩罚。过窄或偏移的区间也有风险：一旦真实损失落在区间外，超出距离会受到较重惩罚。最优策略应当是提交由实验结果支持的点预测，并给出校准良好、不过度扩张的不确定性区间。
+
+最终预训练运行应当成功、稳定地完成。如果你的最终配置因
+timeout、数值不稳定或训练崩溃而失败，最终运行的验证损失会按无效分数处理；由于没有可信的实际最终损失，预测质量惩罚也无法自动计算。经确认的平台或基础设施故障由课程团队审核，会重新予以评测。
+
+\hypertarget{ux89c4ux5219ux4e0eux5b66ux672fux8bdaux4fe1}{%
+\subsection{13.
+规则与学术诚信}\label{ux89c4ux5219ux4e0eux5b66ux672fux8bdaux4fe1}}
+
+本项目关注实验设计和经验推理。你可以使用标准库完成数据分析、绘图、优化和曲线拟合。
+
+除非课程团队另行公布政策：
+
+\begin{itemize}
+\tightlist
+\item
+  只有通过 API 提交的运行会被视为可用实验证据；
+\item
+  不要分享 API key；
+\item
+  不要尝试访问其他学生的实验；
+\item
+  不要尝试绕过预算限制；
+\item
+  不要尝试推断或访问最终评估划分；
+\item
+  不要尝试攻击、过载、爬取或逆向课程后端；
+\end{itemize}
+
+\hypertarget{ux5b9eux7528ux5efaux8bae}{%
+\subsection{14. 实用建议}\label{ux5b9eux7528ux5efaux8bae}}
+
+从一开始就维护结构化实验日志。对于每次运行，记录：
+
+\begin{itemize}
+\tightlist
+\item
+  experiment ID；
+\item
+  提交的配置；
+\item
+  状态；
+\item
+  运行时间；
+\item
+  验证损失；
+\item
+  你为什么运行这个实验；
+\item
+  这个实验如何影响了你的下一步决策。
+\end{itemize}
+
+好的 scaling-law
+工作不只是曲线拟合。你还需要判断哪些运行可信，哪些运行训练不足或不稳定，以及你的外推在哪些地方比较脆弱。
+
+建议将原始实验结果和模型选择决策分开分析。例如，在拟合 scaling
+曲线之前，分别记录吞吐量、运行时间使用、失败模式和验证损失。当两个拟合模型给出相近预测时，应解释为什么更信任其中一个，或把分歧计入不确定性。
+
+谨慎使用失败或部分运行。它们可以提供有关稳定性、显存压力或不佳超参数的证据，但除非
+API 报告运行已完成，否则不应把它们当作完整验证损失观测。
+
+最终获胜的模型不一定是最大的模型。在固定计算预算下，模型可能太小而无法有效利用数据，也可能太大而没有足够训练步数。你的任务是找到最好的权衡。
+
+\end{document}

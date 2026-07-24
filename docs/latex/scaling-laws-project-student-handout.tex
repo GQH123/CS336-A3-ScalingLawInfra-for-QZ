@@ -1,0 +1,805 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\PassOptionsToPackage{dvipsnames,svgnames,x11names}{xcolor}
+%
+\documentclass[
+  11pt,
+]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+\usepackage{listings}
+\usepackage{minted}
+\usepackage{etoolbox}
+\newcommand{\passthrough}[1]{#1}
+\lstset{defaultdialect=[5.3]Lua}
+\lstset{defaultdialect=[x86masm]Assembler}
+\definecolor{CodeBlockText}{HTML}{F8F8F2}
+\usemintedstyle{monokai}
+\AtBeginEnvironment{minted}{\color{CodeBlockText}}
+\BeforeBeginEnvironment{minted}{\vspace{-0.25\baselineskip}}
+\AfterEndEnvironment{minted}{\vspace{-0.35\baselineskip}}
+\renewcommand{\theFancyVerbLine}{\textcolor{Tan}{\scriptsize\arabic{FancyVerbLine}}}
+\setlength{\parskip}{4pt plus 1pt minus 1pt}
+\setminted{
+  bgcolor=Sepia,
+  frame=single,
+  framesep=3pt,
+  framerule=0.4pt,
+  formatcom=\color{CodeBlockText},
+  linenos,
+  numbersep=6pt,
+  breaklines,
+  breakanywhere,
+  fontsize=\small,
+  baselinestretch=0.96,
+  tabsize=4,
+  autogobble
+}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
+\fi
+\IfFileExists{bookmark.sty}{\usepackage{bookmark}}{\usepackage{hyperref}}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  colorlinks=true,
+  linkcolor={blue},
+  filecolor={Maroon},
+  citecolor={Blue},
+  urlcolor={blue},
+  pdfcreator={LaTeX via pandoc}}
+
+\title{Project: Scaling Laws for Language Model Training}
+\author{}
+\date{Draft for student distribution}
+
+\begin{document}
+\maketitle
+
+{
+\hypersetup{linkcolor=}
+\setcounter{tocdepth}{3}
+\tableofcontents
+}
+\hypertarget{project-scaling-laws-for-language-model-training}{%
+\section{Project: Scaling Laws for Language Model
+Training}\label{project-scaling-laws-for-language-model-training}}
+
+Status: Draft for student distribution
+
+\hypertarget{overview}{%
+\subsection{1. Overview}\label{overview}}
+
+In this project, you will study empirical scaling laws for language
+model training. Your goal is to use a limited experimental budget to
+predict how model validation loss changes as model size, data scale,
+optimizer settings, and training compute change.
+
+Scaling laws are useful because large training runs are too expensive to
+explore by trial and error. A good scaling-law study treats smaller runs
+as empirical evidence, then decides which patterns are stable enough to
+extrapolate. This project asks you to make those decisions under a real
+budget: every exploratory run consumes time, but every well-designed run
+should provide useful information about the best final configuration.
+
+You will not implement a training system from scratch. Instead, you will
+submit training configurations to the course API. The course
+infrastructure will run real language-model training jobs using a fixed
+training stack and a consistent staff-controlled hardware environment.
+The API will return validation losses from your official runs.
+
+At the end of the project, you will submit one final training
+configuration for a larger final pretraining run, along with your
+predicted final validation loss and an uncertainty interval. Your score
+depends on both the actual validation loss of your final model and the
+quality of your prediction.
+
+The central question is:
+
+\begin{quote}
+Given a fixed training-compute budget, how should we trade off model
+size, training tokens, and hyperparameters to obtain the lowest
+validation loss?
+\end{quote}
+
+The project therefore asks you to solve both a compute-constrained
+optimization problem and an experimental-inference problem. You are not
+only searching for a good final configuration; you are also deciding
+which exploratory experiments make your final prediction effective and
+credible.
+
+\hypertarget{learning-goals}{%
+\subsection{2. Learning Goals}\label{learning-goals}}
+
+By the end of this project, you should be able to:
+
+\begin{itemize}
+\tightlist
+\item
+  explain the model-size/data-size tradeoff in language model scaling
+\item
+  design small-scale experiments that support extrapolation to a larger
+  run
+\item
+  fit and critique empirical scaling-law models
+\item
+  reason about uncertainty in extrapolated predictions
+\item
+  choose architecture and optimizer hyperparameters under a compute
+  budget
+\item
+  distinguish completed runs, failed runs, partial diagnostics, and
+  final scores
+\item
+  write a reproducible methodology report for a scaling-law experiment
+\end{itemize}
+
+\hypertarget{project-structure}{%
+\subsection{3. Project Structure}\label{project-structure}}
+
+The project has two phases.
+
+The first phase is for exploratory experiments, evidence collection, and
+scaling-law modeling. The second phase is a single final pretraining run
+that tests the configuration and prediction produced by your analysis.
+
+\hypertarget{phase-1-exploratory-scaling-law-experiments}{%
+\subsubsection{Phase 1: Exploratory Scaling-Law
+Experiments}\label{phase-1-exploratory-scaling-law-experiments}}
+
+Each student receives an official exploratory budget of:
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{12 official accelerator-hours}
+\end{itemize}
+
+You may use this budget to submit training configurations to the course
+API. Each accepted experiment is queued and run by the course
+infrastructure. The API will report the experiment status and validation
+losses.
+
+You should use these exploratory runs to decide:
+
+\begin{itemize}
+\tightlist
+\item
+  which model sizes to try
+\item
+  how many training tokens to use
+\item
+  how to allocate compute across runs
+\item
+  which optimizer and learning-rate settings are stable
+\item
+  which scaling-law fitting method to trust
+\item
+  how uncertain your extrapolation is
+\end{itemize}
+
+Exploratory runs do not need to be large to be useful. Small runs can
+establish whether a configuration is valid, whether losses are finite,
+and how runtime scales. Larger exploratory runs are useful when they
+reduce extrapolation error or distinguish between competing scaling-law
+fits.
+
+\hypertarget{phase-2-final-pretraining-run}{%
+\subsubsection{Phase 2: Final Pretraining
+Run}\label{phase-2-final-pretraining-run}}
+
+At the end of the project, you will submit one final configuration for a
+larger official run with budget:
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{48 official accelerator-hours}
+\end{itemize}
+
+You will also submit:
+
+\begin{itemize}
+\tightlist
+\item
+  your predicted final validation loss
+\item
+  a lower bound for your prediction interval
+\item
+  an upper bound for your prediction interval
+\end{itemize}
+
+After the deadline, the course staff will freeze each student's latest
+valid final submission. The final runs will be launched by the course
+infrastructure. The final validation losses will be hidden until results
+are released.
+
+\hypertarget{official-compute-and-hardware-policy}{%
+\subsection{4. Official Compute and Hardware
+Policy}\label{official-compute-and-hardware-policy}}
+
+The project uses official accelerator-hours rather than disclosing a
+specific hardware model. The course guarantees that official exploratory
+and final runs use a consistent staff-controlled hardware type and
+training stack.
+
+Only official API runs count for this project. You should not use
+private GPUs or local training runs to obtain extra official
+experimental evidence. This rule keeps the project fair across students
+with different hardware access.
+
+You may use local compute for ordinary analysis tasks, such as:
+
+\begin{itemize}
+\tightlist
+\item
+  fitting scaling-law curves
+\item
+  plotting results
+\item
+  running notebooks
+\item
+  processing your own experiment logs
+\item
+  writing your report
+\end{itemize}
+
+\hypertarget{data-and-evaluation-policy}{%
+\subsection{5. Data and Evaluation
+Policy}\label{data-and-evaluation-policy}}
+
+The training data is prepared by the course staff. It is drawn from
+public-source data, but the exact dataset mixture, preprocessing,
+tokenized order, and final evaluation split are not disclosed.
+
+All official runs use a fixed tokenized data order. The
+\passthrough{\lstinline!model\_seed!} controls model initialization, not
+the data order.
+
+Exploratory runs report validation losses on the official exploratory
+validation evaluation. Final leaderboard scoring uses a larger held-out
+validation evaluation. This final evaluation uses the same general
+training/evaluation setup, but students cannot repeatedly query it
+during exploration.
+
+Because all students use a strictly controlled deterministic training
+infrastructure and data pipeline, validation losses are comparable
+across your runs. They are still finite-run observations, so your
+analysis should account for failed runs, unstable training, and the fact
+that short or small-scale runs may not reveal the same behavior as
+larger-budget pretraining runs.
+
+\hypertarget{training-configurations}{%
+\subsection{6. Training Configurations}\label{training-configurations}}
+
+Each experiment submission contains a training configuration. The API
+quickstart configuration reference provides the public schema, organized
+around the following groups of parameters.
+
+\hypertarget{architecture-configuration}{%
+\subsubsection{Architecture
+Configuration}\label{architecture-configuration}}
+
+You will configure a dense decoder-only Transformer model. Parameters
+may include:
+
+\begin{itemize}
+\tightlist
+\item
+  number of Transformer layers
+\item
+  hidden size
+\item
+  number of attention heads
+\item
+  head dimension
+\item
+  feedforward/intermediate size
+\item
+  normalization settings
+\item
+  RoPE settings
+\item
+  embedding tying
+\item
+  dtype, where supported
+\item
+  vocabulary size, where supported
+\end{itemize}
+
+The API quickstart is the authoritative field reference. In the current
+schema, \passthrough{\lstinline!model.head\_dim!} is a supported model
+field. If you omit it, the API derives it from
+\passthrough{\lstinline!model.hidden\_size / model.num\_attention\_heads!}.
+If you provide it, \passthrough{\lstinline!model.hidden\_size!} must
+equal
+\passthrough{\lstinline!model.num\_attention\_heads * model.head\_dim!}.
+
+\hypertarget{optimizer-configuration}{%
+\subsubsection{Optimizer Configuration}\label{optimizer-configuration}}
+
+The API supports fixed optimizer families and learning-rate schedules.
+Parameters may include:
+
+\begin{itemize}
+\tightlist
+\item
+  optimizer type
+\item
+  peak learning rate
+\item
+  warmup fraction
+\item
+  final learning-rate fraction
+\item
+  weight decay
+\item
+  beta values, if applicable
+\item
+  epsilon values, if applicable
+\item
+  gradient clipping, if applicable
+\end{itemize}
+
+\hypertarget{training-configuration}{%
+\subsubsection{Training Configuration}\label{training-configuration}}
+
+Training parameters include:
+
+\begin{itemize}
+\tightlist
+\item
+  training batch size
+\item
+  validation batch size
+\item
+  number of evaluations
+\item
+  total training tokens
+\item
+  model seed
+\end{itemize}
+
+The maximum runtime reservation is submitted as
+\passthrough{\lstinline!requested\_runtime\_seconds!} in the
+\passthrough{\lstinline!POST /submit!} request. It is not part of the
+training configuration object.
+
+The API may reject configurations that violate schema or
+tensor-dimension rules. It may also return resource warnings for risky
+configurations, but these warnings do not necessarily mean the
+configuration is invalid.
+
+The configuration controls both the model being trained and the amount
+of evidence you obtain from a run. For example, increasing model size
+may improve capacity but reduce the number of optimizer steps available
+within a fixed runtime. Increasing training tokens may help a model use
+data more effectively, but can also make a run too long for the
+requested reservation. Treat each configuration as a hypothesis about
+compute allocation.
+
+\hypertarget{api-workflow}{%
+\subsection{7. API Workflow}\label{api-workflow}}
+
+The course staff will provide:
+
+\begin{itemize}
+\tightlist
+\item
+  API base URL
+\item
+  API key for each student
+\item
+  API quickstart
+\item
+  sample notebook, if distributed
+\item
+  full request/response schema
+\end{itemize}
+
+All API requests should include your API key in the request headers.
+Your API key is personal. Do not share it.
+
+The public API will include:
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!GET /budget!}
+\item
+  \passthrough{\lstinline!POST /submit!}
+\item
+  \passthrough{\lstinline!GET /experiments!}
+\item
+  \passthrough{\lstinline!GET /experiment/\{experiment\_id\}!}
+\item
+  \passthrough{\lstinline!POST /final\_submission!}
+\item
+  \passthrough{\lstinline!GET /final\_submission!}
+\end{itemize}
+
+The API quickstart provides practical Python examples and sample
+responses. If a sample notebook is distributed, it will show the full
+submit/poll/analyze/final-submission loop.
+
+\hypertarget{typical-workflow}{%
+\subsubsection{Typical Workflow}\label{typical-workflow}}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Check your remaining budget with
+  \passthrough{\lstinline!GET /budget!}.
+\item
+  Submit a training configuration with
+  \passthrough{\lstinline!POST /submit!}.
+\item
+  Poll experiment status with
+  \passthrough{\lstinline!GET /experiment/\{experiment\_id\}!}.
+\item
+  Record validation losses from completed runs.
+\item
+  Fit scaling laws using your collected results.
+\item
+  Submit your final configuration and predicted loss with
+  \passthrough{\lstinline!POST /final\_submission!}.
+\item
+  Confirm your current final submission with
+  \passthrough{\lstinline!GET /final\_submission!}.
+\end{enumerate}
+
+\hypertarget{budget-accounting}{%
+\subsection{8. Budget Accounting}\label{budget-accounting}}
+
+Queued and running experiments reserve their full
+\passthrough{\lstinline!requested\_runtime\_seconds!}.
+
+When an experiment finishes, the system updates budget usage according
+to the final experiment status.
+
+General rules:
+
+\begin{itemize}
+\tightlist
+\item
+  invalid requests are not charged
+\item
+  duplicate identical submissions by the same student are not charged
+  again
+\item
+  queued and running jobs reserve their full requested runtime
+\item
+  completed jobs are charged by actual runtime, up to the requested
+  maximum
+\item
+  timeout failures are charged as the full reserved runtime
+\item
+  numerical or resource failures are charged by actual runtime, up to
+  the requested maximum
+\item
+  clear infrastructure failures may be reviewed by course staff
+\end{itemize}
+
+If you reserve more runtime than your experiment needs, unused reserved
+time is returned after the run completes.
+
+\hypertarget{experiment-status}{%
+\subsection{9. Experiment Status}\label{experiment-status}}
+
+Experiments may have statuses such as:
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!queued!}
+\item
+  \passthrough{\lstinline!running!}
+\item
+  \passthrough{\lstinline!completed!}
+\item
+  \passthrough{\lstinline!failed!}
+\item
+  \passthrough{\lstinline!cancelled!}
+\item
+  \passthrough{\lstinline!system\_failed!}
+\end{itemize}
+
+Completed experiments include a list of validation losses. For completed
+experiments, the final validation loss is the last entry in that list.
+
+Failed exploratory runs may include partial validation losses. These
+partial losses are useful diagnostics, but they are not final validation
+losses and should not be treated as completed-run results.
+
+Failure reasons may include timeout, numerical instability, resource
+failure, or other runtime failures. The course API will provide
+structured failure categories where possible.
+
+\hypertarget{final-submission}{%
+\subsection{10. Final Submission}\label{final-submission}}
+
+Your final submission contains:
+
+\begin{itemize}
+\tightlist
+\item
+  final training configuration
+\item
+  predicted final validation loss
+\item
+  prediction interval lower bound
+\item
+  prediction interval upper bound
+\end{itemize}
+
+You may resubmit before the deadline. The latest valid submission before
+the deadline is the one that will be frozen and used for the final
+pretraining run. The API validates final training configurations before
+storing them. Invalid configs return
+\passthrough{\lstinline!invalid\_final\_submission!} and cannot be
+frozen.
+
+Your prediction interval should represent your honest uncertainty about
+the final validation loss. For example, if your point prediction is
+\passthrough{\lstinline!2.73!}, you might submit an interval such as
+\passthrough{\lstinline![2.69, 2.79]!} if that reflects your fitted
+scaling-law uncertainty and model-selection risk. For scoring, course
+staff interpret this interval as an 80\% central prediction interval by
+default.
+
+The API records your prediction. It does not generate or adjust your
+prediction for you.
+
+\hypertarget{deliverables}{%
+\subsection{11. Deliverables}\label{deliverables}}
+
+You must submit:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{Final API submission}
+
+  \begin{itemize}
+  \tightlist
+  \item
+    final training configuration
+  \item
+    predicted final validation loss
+  \item
+    prediction interval lower and upper bounds
+  \end{itemize}
+\item
+  \textbf{Methodology report}
+
+  \begin{itemize}
+  \tightlist
+  \item
+    description of your experimental design
+  \item
+    list or summary of runs used for fitting
+  \item
+    scaling-law model or models fitted
+  \item
+    plots supporting your extrapolation
+  \item
+    residuals or other fit-quality diagnostics
+  \item
+    explanation of final model-size/data-size choice
+  \item
+    explanation of optimizer/hyperparameter choices
+  \item
+    uncertainty discussion
+  \item
+    limitations and possible failure modes
+  \end{itemize}
+\item
+  \textbf{Analysis code}
+
+  \begin{itemize}
+  \tightlist
+  \item
+    code used to collect, clean, fit, and plot your results
+  \item
+    code should be sufficient to reproduce your reported analysis from
+    your API results
+  \end{itemize}
+\end{enumerate}
+
+The exact submission portal and file format will be announced by course
+staff.
+
+Your report should make your reasoning auditable. A reader should be
+able to see which runs were used, which runs were excluded or
+downweighted, what model you fit, and why the final configuration
+follows from that evidence.
+
+\hypertarget{grading}{%
+\subsection{12. Grading}\label{grading}}
+
+Default grading weights:
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{60\%} final pretraining-run validation loss
+\item
+  \textbf{20\%} prediction quality
+\item
+  \textbf{20\%} methodology report and analysis reproducibility
+\end{itemize}
+
+Prediction quality uses an explicit lower-is-better penalty. Let the
+actual final validation loss be \(L\), your point prediction be
+\(\hat{L}\), and your prediction interval be \([L_-, L_+]\). A valid
+prediction must use finite values and satisfy:
+
+\[
+L_- \le \hat{L} \le L_+.
+\]
+
+Prediction quality has two components:
+
+\begin{itemize}
+\item
+  Point-prediction error:
+
+  \[
+  E_{\text{point}} = |\hat{L} - L|.
+  \]
+\item
+  Interval penalty:
+
+  \[
+  S_{\text{interval}}
+  =
+  (L_+ - L_-)
+  + 10 \max(0, L_- - L)
+  + 10 \max(0, L - L_+).
+  \]
+\end{itemize}
+
+Here, \((L_+ - L_-)\) is the width penalty. If the actual loss falls
+outside the interval, the distance outside the interval is additionally
+multiplied by 10. The coefficient 10 comes from the standard interval
+score for an 80\% central prediction interval, since \(2 / 0.2 = 10\).
+
+The raw prediction-quality penalty is:
+
+\[
+S_{\text{pred}}
+=
+0.5 E_{\text{point}}
++
+0.5 S_{\text{interval}}.
+\]
+
+A wider interval is therefore not automatically better: it may be more
+likely to cover the actual result, but it directly increases the width
+penalty. A narrow or shifted interval is also risky: once the actual
+loss falls outside the interval, the miss distance is penalized heavily.
+The best strategy is to submit a point prediction supported by your
+experiments and a well-calibrated uncertainty interval that is not
+artificially inflated.
+
+The final pretraining run is expected to complete successfully. If your
+final configuration fails due to timeout, numerical instability, or
+resource issues, the final-run validation-loss component receives an
+invalid score; because there is no trustworthy actual final loss, the
+prediction-quality penalty also cannot be computed automatically.
+Confirmed platform or infrastructure failures are reviewed by course
+staff and rerun or adjudicated separately.
+
+\hypertarget{rules-and-academic-integrity}{%
+\subsection{13. Rules and Academic
+Integrity}\label{rules-and-academic-integrity}}
+
+This project is about experimental design and empirical reasoning. You
+may use standard libraries for data analysis, plotting, optimization,
+and curve fitting.
+
+Unless course staff announce a different policy:
+
+\begin{itemize}
+\tightlist
+\item
+  only official API runs count as official experimental evidence
+\item
+  do not share API keys
+\item
+  do not attempt to access another student's experiments
+\item
+  do not attempt to bypass budget limits
+\item
+  do not attempt to infer or access the final evaluation split
+\item
+  do not attack, overload, scrape, or reverse-engineer the course
+  backend
+\item
+  disclose any external assistance according to the course policy
+\end{itemize}
+
+\hypertarget{practical-advice}{%
+\subsection{14. Practical Advice}\label{practical-advice}}
+
+Keep a structured experiment log from the beginning. For every run,
+record:
+
+\begin{itemize}
+\tightlist
+\item
+  experiment ID
+\item
+  submitted configuration
+\item
+  status
+\item
+  runtime
+\item
+  validation losses
+\item
+  notes about why you ran it
+\item
+  how it affected your next decision
+\end{itemize}
+
+Good scaling-law work is not just curve fitting. It also requires
+knowing which runs are trustworthy, which runs were undertrained or
+unstable, and where your extrapolation is fragile.
+
+Prefer analyses that separate raw experimental observations from
+model-selection decisions. For example, track throughput, runtime usage,
+failure modes, and validation losses separately before fitting a scaling
+curve. When two fitted laws make similar predictions, explain why you
+trusted one more than the other or report the disagreement as part of
+your uncertainty.
+
+Use failed or partial runs carefully. They can be useful evidence about
+stability, memory pressure, or poor hyperparameters, but they should not
+be treated as completed validation-loss observations unless the API
+reports a completed result.
+
+The winning final model is not necessarily the largest model. Under a
+fixed compute budget, a model can be too small to use the data
+effectively or too large to train enough. Your job is to find the best
+tradeoff.
+
+\end{document}

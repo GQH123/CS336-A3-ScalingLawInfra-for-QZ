@@ -1,0 +1,767 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\PassOptionsToPackage{dvipsnames,svgnames,x11names}{xcolor}
+%
+\documentclass[
+]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+\usepackage{listings}
+\usepackage{minted}
+\usepackage{etoolbox}
+\newcommand{\passthrough}[1]{#1}
+\lstset{defaultdialect=[5.3]Lua}
+\lstset{defaultdialect=[x86masm]Assembler}
+\definecolor{CodeBlockText}{HTML}{F8F8F2}
+\usemintedstyle{monokai}
+\AtBeginEnvironment{minted}{\color{CodeBlockText}}
+\BeforeBeginEnvironment{minted}{\vspace{-0.25\baselineskip}}
+\AfterEndEnvironment{minted}{\vspace{-0.35\baselineskip}}
+\renewcommand{\theFancyVerbLine}{\textcolor{Tan}{\scriptsize\arabic{FancyVerbLine}}}
+\setlength{\parskip}{4pt plus 1pt minus 1pt}
+\setminted{
+  bgcolor=Sepia,
+  frame=single,
+  framesep=3pt,
+  framerule=0.4pt,
+  formatcom=\color{CodeBlockText},
+  linenos,
+  numbersep=6pt,
+  breaklines,
+  breakanywhere,
+  fontsize=\small,
+  baselinestretch=0.96,
+  tabsize=4,
+  autogobble
+}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
+\fi
+\IfFileExists{bookmark.sty}{\usepackage{bookmark}}{\usepackage{hyperref}}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  colorlinks=true,
+  linkcolor={blue},
+  filecolor={Maroon},
+  citecolor={Blue},
+  urlcolor={blue},
+  pdfcreator={LaTeX via pandoc}}
+
+\title{Scaling Laws Project API Quickstart}
+\author{}
+\date{Draft for student distribution}
+
+\begin{document}
+\maketitle
+
+{
+\hypersetup{linkcolor=}
+\setcounter{tocdepth}{3}
+\tableofcontents
+}
+\hypertarget{scaling-laws-project-api-quickstart}{%
+\section{Scaling Laws Project API
+Quickstart}\label{scaling-laws-project-api-quickstart}}
+
+Status: Draft for student distribution
+
+This quickstart explains the public request and response format for the
+course API: check budget, submit runs, poll results, organize data, and
+submit the final configuration. Course staff will provide the API URL
+and your personal API key before the project begins.
+
+The English and Chinese companion Jupyter notebooks included with the
+project release contain the same workflow as executable cells with
+sample response objects. Use the notebook version when you want to run
+or copy code directly.
+
+\hypertarget{setup}{%
+\subsection{1. Setup}\label{setup}}
+
+Install the Python \passthrough{\lstinline!requests!} dependency:
+
+\begin{minted}{bash}
+python -m pip install requests
+\end{minted}
+
+Set the API URL and API key:
+
+\begin{minted}{python}
+import json
+import os
+import sys
+import time
+import requests
+
+API_BASE_URL = os.environ["SCALING_API_BASE_URL"].rstrip("/")
+API_KEY = os.environ["SCALING_API_KEY"]
+HEADERS = {"Authorization": f"Bearer {API_KEY}"}
+
+
+def api_request(method, path, **kwargs):
+    response = requests.request(
+        method,
+        f"{API_BASE_URL}{path}",
+        headers=HEADERS,
+        **kwargs,
+    )
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"raw_response": response.text}
+
+    if response.status_code == 409:
+        return body
+    if response.status_code < 200 or response.status_code >= 300:
+        print(
+            json.dumps(body, ensure_ascii=False, indent=2, sort_keys=True),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return body
+\end{minted}
+
+Your API key is personal. Do not share it or include it in your report.
+
+\hypertarget{check-budget}{%
+\subsection{2. Check Budget}\label{check-budget}}
+
+\begin{minted}{python}
+budget = api_request("GET", "/budget")
+budget
+\end{minted}
+
+Example response:
+
+\begin{minted}{text}
+{
+  "student_id": "student-1",
+  "total_seconds": 43200,
+  "reserved_seconds": 0,
+  "charged_seconds": 0,
+  "remaining_seconds": 43200
+}
+\end{minted}
+
+Budget is reported in seconds. \passthrough{\lstinline!43200!} seconds
+equals 12 official accelerator-hours.
+
+\hypertarget{create-a-small-configuration}{%
+\subsection{3. Create a Small
+Configuration}\label{create-a-small-configuration}}
+
+Start with a small configuration to verify the workflow, correctness,
+and stability before spending substantial budget on experiments.
+
+\begin{minted}{python}
+config = {
+    "model": {
+        "num_hidden_layers": 2,
+        "hidden_size": 128,
+    },
+    "training": {
+        "train_tokens": 4096,
+        "num_evals": 1,
+        "learning_rate": 3e-4,
+    },
+}
+\end{minted}
+
+The API fills documented defaults such as sequence length, batch size,
+evaluation count, optimizer settings, and model seed. It checks
+submissions early and rejects incompatible model dimensions,
+divisibility errors, non-finite numeric values, requests that exceed
+your remaining budget, and similar issues.
+
+\hypertarget{supported-training-configuration-format}{%
+\subsection{4. Supported Training Configuration
+Format}\label{supported-training-configuration-format}}
+
+The same training configuration object is used in two places:
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!POST /submit!}: pass it as
+  \passthrough{\lstinline!config!}
+\item
+  \passthrough{\lstinline!POST /final\_submission!}: pass it as
+  \passthrough{\lstinline!training\_config!}
+\end{itemize}
+
+The public configuration has exactly two top-level objects:
+
+\begin{minted}{python}
+config = {
+    "model": {
+        # model fields
+    },
+    "training": {
+        # training and optimizer fields
+    },
+}
+\end{minted}
+
+Use the documented fields below. Fields marked required must be present.
+Fields marked optional may be omitted; the API fills the documented
+default.
+
+Required fields:
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!model.num\_hidden\_layers!}: positive integer,
+  number of Transformer decoder blocks. Increasing this at fixed width
+  usually increases non-embedding parameters and training FLOPs roughly
+  linearly, so it is one of the main model-size knobs for scaling-law
+  sweeps.
+\item
+  \passthrough{\lstinline!model.hidden\_size!}: positive integer, width
+  of the residual stream, token embeddings, attention projections, and
+  MLP input/output. This is a strong architecture-size knob; attention
+  and MLP parameter counts grow roughly quadratically with it at fixed
+  depth. It must be compatible with the attention head layout described
+  below.
+\item
+  \passthrough{\lstinline!training.train\_tokens!}: positive integer,
+  total number of training tokens to consume from the fixed course data
+  order. The worker trains on the first
+  \passthrough{\lstinline!training.train\_tokens!} tokens implied by
+  that deterministic stream; this field does not reshuffle data or
+  define epochs. Larger values spend more optimizer work and more
+  accelerator budget.
+\item
+  \passthrough{\lstinline!training.learning\_rate!}: positive finite
+  float, peak learning rate. With the \passthrough{\lstinline!cosine!}
+  schedule, training warms from zero to this value and then decays
+  toward
+  \passthrough{\lstinline!training.learning\_rate * training.final\_lr\_fraction!};
+  with the \passthrough{\lstinline!constant!} schedule, the worker uses
+  this value throughout training. Tune this together with model size and
+  batch size: too large often produces numerical failure, while too
+  small undertrains.
+\end{itemize}
+
+Optional model fields:
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!model.attention\_bias!}: boolean, default
+  \passthrough{\lstinline!false!}. Adds learned bias terms to attention
+  projections when enabled. Leave it fixed across comparable experiments
+  so parameter-count changes are attributable to the intended scaling
+  variable.
+\item
+  \passthrough{\lstinline!model.head\_dim!}: positive integer, default
+  \passthrough{\lstinline!model.hidden\_size / model.num\_attention\_heads!}.
+  This is the width of each attention head. It is usually derived from
+  \passthrough{\lstinline!model.hidden\_size!} and
+  \passthrough{\lstinline!model.num\_attention\_heads!}; supply it only
+  when you want the API to check an explicit head layout.
+\item
+  \passthrough{\lstinline!model.intermediate\_size!}: positive integer,
+  default \passthrough{\lstinline!4 * model.hidden\_size!}. This is the
+  hidden width of the feed-forward/SwiGLU block. Larger values increase
+  non-embedding parameters and FLOPs substantially; common sweeps keep
+  it as a fixed multiple of
+  \passthrough{\lstinline!model.hidden\_size!}.
+\item
+  \passthrough{\lstinline!model.num\_attention\_heads!}: positive
+  integer, default \passthrough{\lstinline!1!}. This is the number of
+  query attention heads. At fixed
+  \passthrough{\lstinline!model.hidden\_size!}, more heads mean a
+  smaller \passthrough{\lstinline!model.head\_dim!}; keep
+  \passthrough{\lstinline!model.head\_dim!} valid for the GPU attention
+  backend.
+\item
+  \passthrough{\lstinline!model.num\_key\_value\_heads!}: positive
+  integer, default
+  \passthrough{\lstinline!model.num\_attention\_heads!}. This would
+  control grouped-query attention, but the current Stanford reference
+  runtime does not support grouped-query attention, so set it equal to
+  \passthrough{\lstinline!model.num\_attention\_heads!}.
+\item
+  \passthrough{\lstinline!model.rms\_norm\_eps!}: positive finite float,
+  default \passthrough{\lstinline!1e-6!}. Epsilon added in RMSNorm for
+  numerical stability. The default is the reference-trainer value;
+  changing it is usually an ablation rather than a scaling-law knob.
+\item
+  \passthrough{\lstinline!model.rope\_theta!}: positive integer, default
+  \passthrough{\lstinline!1000000!}. Rotary-position embedding frequency
+  base. Leave the default unless you are deliberately studying
+  position-encoding behavior.
+\item
+  \passthrough{\lstinline!model.tie\_word\_embeddings!}: boolean,
+  default \passthrough{\lstinline!false!}. When true, the output
+  classifier reuses the input embedding matrix, reducing parameters.
+  Keep this choice fixed across runs that you want to compare directly.
+\item
+  \passthrough{\lstinline!model.dtype!}: one of
+  \passthrough{\lstinline!float32!}, \passthrough{\lstinline!bfloat16!};
+  default \passthrough{\lstinline!bfloat16!}.
+  \passthrough{\lstinline!bfloat16!} is the normal GPU-efficient
+  training dtype. \passthrough{\lstinline!float32!} uses more memory and
+  runtime and is mainly useful for controlled numerical comparisons.
+\item
+  \passthrough{\lstinline!model.vocab\_size!}: positive integer, default
+  \passthrough{\lstinline!50432!}. This must match the tokenized data
+  requirements. The current course deployment uses
+  \passthrough{\lstinline!EleutherAI/gpt-neox-20b!} token IDs and
+  requires at least \passthrough{\lstinline!50432!}; increasing it adds
+  embedding/output parameters that usually do not represent useful model
+  capacity for this assignment.
+\end{itemize}
+
+Optional training fields:
+
+\begin{itemize}
+\tightlist
+\item
+  \passthrough{\lstinline!training.sequence\_length!}: positive integer,
+  default \passthrough{\lstinline!1024!}. Number of tokens in each
+  training sequence/context window. It affects memory use and the number
+  of tokens per optimizer step:
+  \passthrough{\lstinline!training.sequence\_length * training.train\_batch\_size!}.
+\item
+  \passthrough{\lstinline!training.train\_batch\_size!}: positive
+  integer, default \passthrough{\lstinline!1!}. Number of sequences in
+  each optimizer step. At fixed
+  \passthrough{\lstinline!training.train\_tokens!}, larger batches
+  produce fewer optimizer updates and usually require more memory.
+\item
+  \passthrough{\lstinline!training.validation\_batch\_size!}: positive
+  integer, default \passthrough{\lstinline!1!}. Number of validation
+  sequences evaluated at once. It does not change the training
+  objective, but it must fit memory and satisfy validation-token
+  divisibility.
+\item
+  \passthrough{\lstinline!training.num\_evals!}: positive integer,
+  default \passthrough{\lstinline!10!}. Number of training
+  chunks/evaluation points. The worker trains for
+  \passthrough{\lstinline!training.train\_tokens / training.num\_evals!}
+  tokens per chunk and records one validation loss after each chunk; the
+  final validation loss is the last entry. For tiny smoke tests with
+  only a few optimizer steps, set this to \passthrough{\lstinline!1!}.
+\item
+  \passthrough{\lstinline!training.model\_seed!}: non-negative integer,
+  default \passthrough{\lstinline!0!}. Controls model initialization
+  only. The course data order is fixed, so changing this seed does not
+  reshuffle the training stream.
+\item
+  \passthrough{\lstinline!training.optimizer!}: one of
+  \passthrough{\lstinline!adamw!}, \passthrough{\lstinline!sgd!};
+  default \passthrough{\lstinline!adamw!}. AdamW is the default
+  reference optimizer. SGD is available for controlled comparisons but
+  usually needs separate learning-rate tuning.
+\item
+  \passthrough{\lstinline!training.lr\_schedule!}: one of
+  \passthrough{\lstinline!cosine!}, \passthrough{\lstinline!constant!};
+  default \passthrough{\lstinline!cosine!}.
+  \passthrough{\lstinline!cosine!} uses
+  \passthrough{\lstinline!training.warmup\_fraction!} and
+  \passthrough{\lstinline!training.final\_lr\_fraction!};
+  \passthrough{\lstinline!constant!} keeps the learning rate fixed at
+  \passthrough{\lstinline!training.learning\_rate!}.
+\item
+  \passthrough{\lstinline!training.weight\_decay!}: non-negative finite
+  float, default \passthrough{\lstinline!0.0!}. Decoupled AdamW weight
+  decay strength. It is ignored by SGD in the reference runtime. Common
+  AdamW baselines often use small values such as
+  \passthrough{\lstinline!0.01!}.
+\item
+  \passthrough{\lstinline!training.adam\_beta1!}: finite float in
+  \passthrough{\lstinline![0, 1)!}, default
+  \passthrough{\lstinline!0.9!}. AdamW first moment coefficient. Ignored
+  by SGD.
+\item
+  \passthrough{\lstinline!training.adam\_beta2!}: finite float in
+  \passthrough{\lstinline![0, 1)!}, default
+  \passthrough{\lstinline!0.95!}. AdamW second moment coefficient.
+  Ignored by SGD.
+\item
+  \passthrough{\lstinline!training.adam\_epsilon!}: positive finite
+  float, default \passthrough{\lstinline!1e-8!}. AdamW denominator
+  epsilon for numerical stability. Ignored by SGD.
+\item
+  \passthrough{\lstinline!training.warmup\_fraction!}: finite float in
+  \passthrough{\lstinline![0, 1)!}, default
+  \passthrough{\lstinline!0.0!}. Fraction of optimizer steps used to
+  increase the learning rate from zero to
+  \passthrough{\lstinline!training.learning\_rate!} under the cosine
+  schedule.
+\item
+  \passthrough{\lstinline!training.final\_lr\_fraction!}: finite float
+  in \passthrough{\lstinline![0, 1]!}, default
+  \passthrough{\lstinline!0.0!}. Final learning-rate multiplier for the
+  cosine schedule. For example, \passthrough{\lstinline!0.1!} ends at
+  ten percent of the peak learning rate.
+\item
+  \passthrough{\lstinline!training.gradient\_clip\_norm!}: positive
+  finite float, default \passthrough{\lstinline!1.0!}. Global
+  gradient-norm clipping threshold. Lower values can stabilize spikes
+  but may slow learning if they clip most updates.
+\end{itemize}
+
+Important validation rules:
+
+\begin{itemize}
+\tightlist
+\item
+  If \passthrough{\lstinline!model.head\_dim!} is supplied,
+  \passthrough{\lstinline!model.hidden\_size!} must equal
+  \passthrough{\lstinline!model.num\_attention\_heads * model.head\_dim!}.
+  If \passthrough{\lstinline!model.head\_dim!} is omitted,
+  \passthrough{\lstinline!model.hidden\_size!} must be divisible by
+  \passthrough{\lstinline!model.num\_attention\_heads!}, and the API
+  derives \passthrough{\lstinline!model.head\_dim!}.
+\item
+  \passthrough{\lstinline!model.num\_attention\_heads!} must be
+  divisible by \passthrough{\lstinline!model.num\_key\_value\_heads!},
+  and the current Stanford reference runtime requires
+  \passthrough{\lstinline!model.num\_key\_value\_heads == model.num\_attention\_heads!}
+  because grouped-query attention is not supported.
+\item
+  \passthrough{\lstinline!model.head\_dim!} must be
+  \passthrough{\lstinline!<= 128!} and a multiple of
+  \passthrough{\lstinline!8!} for the current GPU attention backend. For
+  example, use \passthrough{\lstinline!model.num\_attention\_heads: 16!}
+  with \passthrough{\lstinline!model.hidden\_size: 2048!} so
+  \passthrough{\lstinline!model.head\_dim!} is
+  \passthrough{\lstinline!128!}.
+\item
+  \passthrough{\lstinline!model.intermediate\_size!} must be greater
+  than or equal to \passthrough{\lstinline!model.hidden\_size!}.
+\item
+  \passthrough{\lstinline!model.vocab\_size!} must be at least
+  \passthrough{\lstinline!50432!} for the current
+  \passthrough{\lstinline!EleutherAI/gpt-neox-20b!} tokenized dataset.
+  Smaller vocabularies can make token IDs exceed the embedding table and
+  are rejected.
+\item
+  When course staff run workers with
+  \passthrough{\lstinline!worker\_gpu\_count > 1!}, the Stanford FSDP
+  parameter sharding also requires
+  \passthrough{\lstinline!model.hidden\_size!} and
+  \passthrough{\lstinline!model.intermediate\_size!} to be divisible by
+  \passthrough{\lstinline!worker\_gpu\_count!}. If
+  \passthrough{\lstinline!model.tie\_word\_embeddings!} is
+  \passthrough{\lstinline!false!},
+  \passthrough{\lstinline!model.vocab\_size!} must also be divisible by
+  \passthrough{\lstinline!worker\_gpu\_count!}.
+\item
+  \passthrough{\lstinline!training.train\_tokens!} must be divisible by
+  \passthrough{\lstinline!training.sequence\_length * training.train\_batch\_size!}.
+\item
+  \passthrough{\lstinline!training.train\_tokens!} must be at most
+  \passthrough{\lstinline!500000000000!}.
+\item
+  Total optimizer steps equal
+  \passthrough{\lstinline!training.train\_tokens!} divided by
+  \passthrough{\lstinline!training.sequence\_length * training.train\_batch\_size!}.
+\item
+  Total optimizer steps must be divisible by
+  \passthrough{\lstinline!training.num\_evals!}.
+\item
+  Validation batches must fit the course validation-token setting;
+  incompatible \passthrough{\lstinline!training.sequence\_length!} or
+  \passthrough{\lstinline!training.validation\_batch\_size!} values are
+  rejected.
+\item
+  When course staff run workers with
+  \passthrough{\lstinline!worker\_gpu\_count > 1!},
+  \passthrough{\lstinline!training.train\_batch\_size!} and
+  \passthrough{\lstinline!training.validation\_batch\_size!} must be
+  divisible by \passthrough{\lstinline!worker\_gpu\_count!} because the
+  Stanford trainer shards the batch axis across the FSDP mesh.
+\item
+  All numeric fields must be finite, and fields documented as positive
+  must be strictly greater than zero. In particular,
+  \passthrough{\lstinline!training.learning\_rate!} must be positive and
+  finite.
+\item
+  Unsupported top-level, \passthrough{\lstinline!model!}, or
+  \passthrough{\lstinline!training!} fields are rejected, including
+  legacy model field names. This helps catch misspelled field names
+  before they silently change an experiment.
+\end{itemize}
+
+If a final submission uses a configuration that fails these checks, the
+API returns \passthrough{\lstinline!invalid\_final\_submission!} and
+does not store that final submission.
+
+\hypertarget{submit-a-run}{%
+\subsection{5. Submit a Run}\label{submit-a-run}}
+
+\begin{minted}{python}
+submit_result = api_request(
+    "POST",
+    "/submit",
+    json={
+        "config": config,
+        "requested_runtime_seconds": 300,
+    },
+)
+submit_result
+\end{minted}
+
+Example success response:
+
+\begin{minted}{text}
+{
+  "experiment_id": "exp-000001",
+  "status": "queued",
+  "budget_reserved_seconds": 300,
+  "resource_warnings": [
+    "very_low_optimizer_steps"
+  ],
+  "resolved_config": {
+    "parameter_count_estimate": 4260096,
+    "tokens_per_optimizer_step": 1024,
+    "total_optimizer_steps": 4,
+    "resource_warnings": [
+      "very_low_optimizer_steps"
+    ]
+  }
+}
+\end{minted}
+
+Queued and running experiments reserve the full requested runtime. If a
+run finishes early, unused reserved budget is returned according to
+course rules. \passthrough{\lstinline!resource\_warnings!} are advisory
+and do not reject the run.
+
+Example duplicate response:
+
+\begin{minted}{text}
+{
+  "error": "duplicate_config",
+  "message": "An identical configuration was already submitted.",
+  "experiment_id": "exp-000001"
+}
+\end{minted}
+
+Duplicate detection is scoped to your API key and does not expose other
+students' experiment IDs or configs.
+
+\hypertarget{poll-a-run}{%
+\subsection{6. Poll a Run}\label{poll-a-run}}
+
+\begin{minted}{python}
+experiment_id = submit_result["experiment_id"]
+terminal_statuses = {"completed", "failed", "cancelled", "system_failed"}
+
+while True:
+    experiment = api_request("GET", f"/experiment/{experiment_id}")
+    status = experiment["status"]
+    print("status:", status)
+
+    if status in terminal_statuses:
+        break
+
+    time.sleep(30)
+\end{minted}
+
+Example completed response:
+
+\begin{minted}{text}
+{
+  "experiment_id": "exp-000001",
+  "status": "completed",
+  "validation_losses": [4.2, 3.7],
+  "final_validation_loss": 3.7,
+  "failure_reason": "",
+  "used_runtime_seconds": 180,
+  "completed_at": "2026-07-16T15:00:00Z",
+  "failed_at": "",
+  "resource_warnings": []
+}
+\end{minted}
+
+For completed runs, use
+\passthrough{\lstinline!final\_validation\_loss!} as the run result.
+\passthrough{\lstinline!used\_runtime\_seconds!} is the billable runtime
+under the course runtime rules.
+\passthrough{\lstinline!validation\_losses!} is an ordered history of
+validation evaluations during training. It is not a confidence interval
+and not \passthrough{\lstinline![lower, upper]!}; for a completed run,
+\passthrough{\lstinline!final\_validation\_loss!} equals the last value
+in \passthrough{\lstinline!validation\_losses!}.
+
+Example failed response:
+
+\begin{minted}{text}
+{
+  "experiment_id": "exp-000002",
+  "status": "failed",
+  "validation_losses": [4.6, 4.1],
+  "final_validation_loss": null,
+  "failure_reason": "timeout",
+  "used_runtime_seconds": 600,
+  "completed_at": "",
+  "failed_at": "2026-07-16T15:00:00Z",
+  "resource_warnings": []
+}
+\end{minted}
+
+Partial validation losses from failed runs are diagnostics for
+debugging. They are not final validation losses and should not be
+treated as completed-run results.
+
+\hypertarget{list-and-save-results}{%
+\subsection{7. List and Save Results}\label{list-and-save-results}}
+
+\begin{minted}{python}
+experiments = api_request("GET", "/experiments")["experiments"]
+
+rows = []
+for exp in experiments:
+    rows.append(
+        {
+            "experiment_id": exp["experiment_id"],
+            "status": exp["status"],
+            "final_loss": (
+                exp["final_validation_loss"]
+                if exp["status"] == "completed"
+                else None
+            ),
+            "validation_losses": exp["validation_losses"],
+            "used_runtime_seconds": exp["used_runtime_seconds"],
+        }
+    )
+\end{minted}
+
+Keep an experiment log with each run's purpose, the scaling-law
+hypothesis it tested, and how the result changed your next experimental
+decision. Make sure your submitted configuration can train reliably;
+final training crashes caused by configuration robustness issues make
+the final score invalid.
+
+\hypertarget{submit-the-final-configuration}{%
+\subsection{8. Submit the Final
+Configuration}\label{submit-the-final-configuration}}
+
+Your final submission includes a training config, a predicted final
+loss, and a prediction interval. Invalid configs detected by the API
+return \passthrough{\lstinline!invalid\_final\_submission!} and are not
+stored.
+
+\begin{minted}{python}
+final_submission = api_request(
+    "POST",
+    "/final_submission",
+    json={
+        "training_config": config,
+        "predicted_final_loss": 3.25,
+        "predicted_final_loss_lower": 3.18,
+        "predicted_final_loss_upper": 3.36,
+    },
+)
+final_submission
+\end{minted}
+
+Example response:
+
+\begin{minted}{text}
+{
+  "student_id": "student-1",
+  "training_config": {
+    "model": {"num_hidden_layers": 2, "hidden_size": 128},
+    "training": {"train_tokens": 4096, "num_evals": 1, "learning_rate": 0.0003}
+  },
+  "predicted_final_loss": 3.25,
+  "predicted_final_loss_lower": 3.18,
+  "predicted_final_loss_upper": 3.36,
+  "updated_at": "2026-07-16T15:00:00Z",
+  "frozen_at": "",
+  "frozen_by": "",
+  "freeze_reason": ""
+}
+\end{minted}
+
+You may submit multiple times before the deadline. The latest valid
+final submission before the deadline is used for final evaluation.
+
+Confirm the current final configuration:
+
+\begin{minted}{python}
+final_submission = api_request("GET", "/final_submission")
+final_submission
+\end{minted}
+
+After the deadline, this endpoint returns the frozen record with
+\passthrough{\lstinline!frozen\_at!},
+\passthrough{\lstinline!frozen\_by!}, and
+\passthrough{\lstinline!freeze\_reason!} populated.
+
+\hypertarget{common-errors}{%
+\subsection{9. Common Errors}\label{common-errors}}
+
+Invalid API key:
+
+\begin{minted}{text}
+{
+  "error": "invalid_api_key",
+  "message": "Invalid or missing API key."
+}
+\end{minted}
+
+Invalid configuration:
+
+\begin{minted}{text}
+{
+  "error": "invalid_config",
+  "message": "model.hidden_size must be divisible by model.num_attention_heads"
+}
+\end{minted}
+
+Missing final submission:
+
+\begin{minted}{text}
+{
+  "error": "final_submission_not_found",
+  "message": "Final submission not found."
+}
+\end{minted}
+
+Contact course staff if you have further questions.
+
+\end{document}
