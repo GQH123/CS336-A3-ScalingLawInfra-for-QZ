@@ -1,0 +1,14 @@
+numpy>=1.24
+
+# Install the Stanford CS336 backend into the compute-node image as a separate
+# package so its source and dependency set remain explicit:
+#
+#   # CUDA 13 driver path:
+#   python -m pip install -c deploy/compute-node/constraints.txt './refs/cs336-assignment3-scaling[server]'
+#
+#   # CUDA 12 driver path:
+#   python -m pip install -c deploy/compute-node/constraints.txt -r deploy/compute-node/requirements-cuda12.txt
+#   python -m pip install --no-deps flash-hog==0.5.0
+#   python -m pip install --no-deps ./refs/cs336-assignment3-scaling
+#
+# The course_trainer adapter imports cs336_scaling lazily at training time.
