@@ -550,6 +550,12 @@ through as `failed` results. Worker-reported system reasons such as
 `infrastructure_error`, including tokenized-index artifact failures, become
 `system_failed`, release the active exploratory reservation without charging the
 student, and keep raw type/message detail in staff-only `staff_failure_detail`.
+When a worker-reported student failure, or a provider log tail from a job that
+ended before sending a terminal callback, contains traceback-like compute-node
+text, the student result may also include `failure_detail`. This field is a
+sanitized public diagnostic intended for actionable runtime errors; it is not a
+mirror of staff-only `staff_failure_detail`, and infrastructure/provider-secret
+messages remain hidden.
 Common raw worker exception names such as `FloatingPointError`, `TimeoutError`,
 `MemoryError`, and malformed-result `WorkerResultError` are mapped to stable
 typed categories.

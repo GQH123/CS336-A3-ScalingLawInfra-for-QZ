@@ -1136,6 +1136,40 @@ def test_unknown_worker_failure_type_maps_to_unknown_student_caused_public_reaso
     )
 
 
+def test_public_worker_failure_detail_round_trips_snapshot(tmp_path):
+    service = _service()
+    submitted = service.submit(
+        student_id="student-1",
+        config=_config(),
+        requested_runtime_seconds=600,
+    )
+
+    service.record_worker_event(
+        {
+            "experiment_id": submitted.experiment_id,
+            "event_type": "worker_failed",
+            "failure_type": "NotImplementedError",
+            "actual_runtime_seconds": 10,
+            "message": "Q must be fp16/bf16/fp8_e4m3fn/fp8_e5m2, got float32",
+        }
+    )
+
+    result = service.get_result("student-1", submitted.experiment_id)
+    assert result.failure_reason == "unknown_student_caused"
+    assert result.failure_detail == (
+        "NotImplementedError: Q must be fp16/bf16/fp8_e4m3fn/fp8_e5m2, "
+        "got float32"
+    )
+
+    snapshot_path = tmp_path / "state.json"
+    service.save_state_snapshot(snapshot_path)
+    restored = _service()
+    restored.load_state_snapshot(snapshot_path)
+
+    restored_result = restored.get_result("student-1", submitted.experiment_id)
+    assert restored_result.failure_detail == result.failure_detail
+
+
 def test_tokenized_index_worker_failure_maps_to_infrastructure_error():
     service = _service()
     submitted = service.submit(
