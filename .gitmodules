@@ -1,0 +1,6 @@
+[submodule "refs/cs336-assignment3-scaling"]
+	path = refs/cs336-assignment3-scaling
+	url = https://github.com/stanford-cs336/assignment3-scaling
+[submodule "refs/qzcli_tool"]
+	path = refs/qzcli_tool
+	url = https://github.com/tianyilt/qzcli_tool
