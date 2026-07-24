@@ -1,0 +1,14 @@
+# Compute-node dependency pins layered on top of upstream package metadata.
+#
+# The Stanford reference package currently declares furu>=0.0.27, but its code
+# imports `from furu import Furu`, which is verified against furu 0.0.27 in the
+# bundled uv.lock. Newer furu releases changed that public export.
+furu==0.0.27
+
+# flash-hog imports chex at runtime, but CUDA 12 images install flash-hog with
+# --no-deps. Pin the chex version bundled in the Stanford reference uv.lock.
+chex==0.1.91
+
+# flash-hog 0.5.0 declares jax[cuda13] on Linux. CUDA 12 compute-node images
+# must install this exact wheel with --no-deps after installing jax[cuda12].
+flash-hog==0.5.0

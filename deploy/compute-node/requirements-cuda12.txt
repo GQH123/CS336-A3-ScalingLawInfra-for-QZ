@@ -1,0 +1,41 @@
+# Server/training dependencies for compute nodes whose NVIDIA driver supports
+# CUDA 12.x but not CUDA 13.x. This mirrors
+# refs/cs336-assignment3-scaling[server], except packages whose metadata force
+# the Linux JAX CUDA 13 extra are installed separately with --no-deps. Runtime
+# dependencies skipped by those --no-deps installs must stay explicit here.
+#
+# Install with:
+#
+#   python -m pip install -c deploy/compute-node/constraints.txt -r deploy/compute-node/requirements-cuda12.txt
+#   python -m pip install --no-deps flash-hog==0.5.0
+#   python -m pip install --no-deps ./refs/cs336-assignment3-scaling
+#
+# Do not list flash-hog as an active requirement in this file. flash-hog 0.5.0
+# declares jax[cuda13] on Linux, so letting pip resolve it in the CUDA 12
+# dependency pass installs both jax-cuda12-* and jax-cuda13-* plugins.
+
+pydantic>=2.8
+requests>=2.32
+rich>=14.0
+
+chex==0.1.91
+einx>=0.3.0
+einops>=0.8.1
+equinox>=0.13.0
+fastapi[standard]>=0.115
+furu>=0.0.27
+jax[cuda12]==0.9.1; sys_platform == "linux"
+jax==0.9.1; sys_platform != "linux"
+jaxtyping>=0.3.3
+modal
+optax>=0.2.3
+polars>=1.40.1
+psycopg[binary]>=3.2
+psycopg2-binary>=2.9.12
+python-dotenv>=1.2.2
+sqlalchemy>=2.0
+tqdm>=4.67
+transformers>=5.6.2
+typer>=0.12
+uvicorn[standard]>=0.30
+wandb>=0.26.1

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "worker": {
+    "trainer": "course_trainer.worker:train",
+    "tokenized_index_validation_mode": "metadata",
+    "heartbeat_interval_seconds": 60
+  },
+  "data": {
+    "tokenized_root": "/mnt/course-data/tokenized",
+    "train_index": "/mnt/course-data/tokenized/train/index.json",
+    "validation_index": "/mnt/course-data/tokenized/validation/index.json",
+    "final_validation_index": "/mnt/course-data/tokenized/final-validation/index.json",
+    "read_mode": "memmap",
+    "prefetch_batches": 8
+  }
+}
