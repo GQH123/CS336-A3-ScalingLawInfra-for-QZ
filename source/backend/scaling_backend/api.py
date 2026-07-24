@@ -558,11 +558,13 @@ def _experiment_result_payload(result) -> dict[str, Any]:
     public_failure_reason = _public_failure_reason(
         status=result.status,
         failure_reason=result.failure_reason,
+        failure_detail=getattr(result, "failure_detail", ""),
     )
     payload = _raw_experiment_result_payload(result)
     payload["status"] = _public_experiment_status(
         result.status,
         result.failure_reason,
+        getattr(result, "failure_detail", ""),
     )
     payload["failure_reason"] = public_failure_reason
     return payload
@@ -586,7 +588,7 @@ def _admin_experiment_result_payload(result) -> dict[str, Any]:
 
 
 def _raw_experiment_result_payload(result) -> dict[str, Any]:
-    return {
+    payload = {
         "experiment_id": result.experiment_id,
         "status": result.status,
         "validation_losses": result.validation_losses,
@@ -597,6 +599,10 @@ def _raw_experiment_result_payload(result) -> dict[str, Any]:
         "failed_at": result.failed_at,
         "resource_warnings": result.resource_warnings,
     }
+    failure_detail = getattr(result, "failure_detail", "")
+    if failure_detail:
+        payload["failure_detail"] = failure_detail
+    return payload
 
 
 def _final_submission_payload(submission) -> dict[str, Any]:
@@ -658,9 +664,15 @@ def _budget_adjustment_payload(adjustment) -> dict[str, Any]:
     }
 
 
-def _public_experiment_status(status: str, failure_reason: str = "") -> str:
+def _public_experiment_status(
+    status: str,
+    failure_reason: str = "",
+    failure_detail: str = "",
+) -> str:
     if status == "submitted":
         return "queued"
+    if failure_detail and failure_reason == "provider_failed_without_worker_callback":
+        return "failed"
     if status in {"lost", "unknown"}:
         return "system_failed"
     if failure_reason in _INTERNAL_PROVIDER_FAILURE_REASONS:
@@ -668,7 +680,14 @@ def _public_experiment_status(status: str, failure_reason: str = "") -> str:
     return status
 
 
-def _public_failure_reason(*, status: str, failure_reason: str) -> str:
+def _public_failure_reason(
+    *,
+    status: str,
+    failure_reason: str,
+    failure_detail: str = "",
+) -> str:
+    if failure_detail and failure_reason == "provider_failed_without_worker_callback":
+        return "unknown_student_caused"
     if failure_reason in _INTERNAL_PROVIDER_FAILURE_REASONS:
         return "unknown_system"
     if status == "lost":
