@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scaling-laws-data"
+version = "0.1.0"
+description = "Data preparation utilities for the scaling-laws course assignment."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+full = [
+  "datasets",
+  "transformers",
+  "zstandard",
+  "tqdm"
+]
+
+[project.scripts]
+scaling-prepare-data = "scaling_data.prepare:main"
+scaling-package-lifecycle-data = "scaling_data.lifecycle_dataset:main"
+scaling-shuffle-tokenized-data = "scaling_data.shuffle_tokenized:main"
+
+[tool.setuptools.packages.find]
+include = ["scaling_data*"]

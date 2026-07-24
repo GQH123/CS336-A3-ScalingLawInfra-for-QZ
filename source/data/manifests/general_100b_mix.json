@@ -1,0 +1,69 @@
+{
+  "manifest_version": 1,
+  "name": "general_100b_mix",
+  "description": "Candidate public-source 100B-token mixture for the scaling-law assignment. Staff should verify dataset IDs, licenses, and access before full download.",
+  "target_tokens": 100000000000,
+  "tokenizer": "EleutherAI/gpt-neox-20b",
+  "sources": [
+    {
+      "id": "general_web",
+      "weight": 0.55,
+      "hf_path": "HuggingFaceFW/fineweb",
+      "hf_name": "sample-100BT",
+      "split": "train",
+      "text_field": "text",
+      "enabled": true,
+      "notes": "Broad high-quality web text candidate. Verify final config and license before full run."
+    },
+    {
+      "id": "education",
+      "weight": 0.20,
+      "hf_path": "HuggingFaceFW/fineweb-edu",
+      "hf_name": "sample-10BT",
+      "split": "train",
+      "text_field": "text",
+      "enabled": true,
+      "notes": "Educational web subset for higher-quality knowledge and reasoning signal."
+    },
+    {
+      "id": "long_form",
+      "weight": 0.10,
+      "hf_path": "monology/pile-uncopyrighted",
+      "hf_name": null,
+      "split": "train",
+      "text_field": "text",
+      "enabled": true,
+      "notes": "Public streamable long-form fallback. Staff may replace with Dolma only after predownloading Dolma files and configuring its DATA_DIR contract."
+    },
+    {
+      "id": "math",
+      "weight": 0.07,
+      "hf_path": "open-web-math/open-web-math",
+      "hf_name": null,
+      "split": "train",
+      "text_field": "text",
+      "enabled": true,
+      "notes": "Mathematical web text candidate."
+    },
+    {
+      "id": "code",
+      "weight": 0.06,
+      "hf_path": "bigcode/the-stack-dedup",
+      "hf_name": "default",
+      "split": "train",
+      "text_field": "content",
+      "enabled": true,
+      "notes": "Gated near-deduplicated BigCode source with file contents in the content field. Requires accepted Hugging Face access with the staff HF token. Do not use bigcode/the-stack-v2 here unless adding a separate Software Heritage content retrieval layer; Stack v2 streams identifiers and metadata rather than file bodies."
+    },
+    {
+      "id": "multilingual",
+      "weight": 0.02,
+      "hf_path": "uonlp/CulturaX",
+      "hf_name": "zh",
+      "split": "train",
+      "text_field": "text",
+      "enabled": true,
+      "notes": "Gated multilingual source using the Chinese CulturaX config. Requires accepted Hugging Face access with the staff HF token."
+    }
+  ]
+}
