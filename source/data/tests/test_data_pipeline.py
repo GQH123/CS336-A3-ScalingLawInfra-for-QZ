@@ -15,9 +15,10 @@ from unittest.mock import patch
 
 from scaling_data import download as download_module
 from scaling_data import prepare as prepare_module
+from scaling_data import tokenize as tokenize_module
 from scaling_data.blend import allocate_token_budget
 from scaling_data.download import download_source
-from scaling_data.io import iter_jsonl_records, write_jsonl_record
+from scaling_data.io import iter_jsonl_records, open_text_writer, write_jsonl_record
 from scaling_data.lifecycle_dataset import (
     LifecycleDatasetError,
     package_lifecycle_dataset,
@@ -25,6 +26,11 @@ from scaling_data.lifecycle_dataset import (
 from scaling_data.pipeline import write_pipeline_plan
 from scaling_data.postprocess import assign_split, postprocess_directory
 from scaling_data.prepare import PrepareDataConfig, prepare_data
+from scaling_data.rebuild_tokenized import (
+    RebuildTokenizedConfig,
+    rebuild_tokenized_from_processed,
+)
+from scaling_data.shuffle_processed import shuffle_processed_splits
 from scaling_data.text_processing import clean_text, document_hash, should_keep_text
 from scaling_data.shuffle_tokenized import shuffle_tokenized_corpus
 from scaling_data.tokenize import (
@@ -40,6 +46,27 @@ class _FakeTokenizer:
     eos_token_id = 0
 
     def encode(self, text, add_special_tokens=False):
+        return [len(part) for part in text.split()]
+
+
+class _BatchFakeTokenizer:
+    eos_token_id = 0
+
+    def __init__(self):
+        self.batch_calls = 0
+        self.encode_calls = 0
+
+    def __call__(self, texts, add_special_tokens=False, **kwargs):
+        self.batch_calls += 1
+        return {
+            "input_ids": [
+                [len(part) for part in text.split()]
+                for text in texts
+            ]
+        }
+
+    def encode(self, text, add_special_tokens=False):
+        self.encode_calls += 1
         return [len(part) for part in text.split()]
 
 
@@ -210,6 +237,91 @@ class PostprocessTests(unittest.TestCase):
                     "delta epsilon zeta",
                     "eta theta iota",
                 ],
+            )
+
+
+class ProcessedShuffleTests(unittest.TestCase):
+    def test_shuffle_processed_splits_preserves_whole_records_by_split(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            input_dir = root / "processed"
+            input_dir.mkdir()
+            train_records = [
+                {
+                    "text": f"train document {index}",
+                    "source_id": "code" if index % 2 else "math",
+                    "split": "train",
+                    "document_hash": f"train-{index}",
+                }
+                for index in range(12)
+            ]
+            validation_records = [
+                {
+                    "text": f"validation document {index}",
+                    "source_id": "general_web",
+                    "split": "validation",
+                    "document_hash": f"validation-{index}",
+                }
+                for index in range(7)
+            ]
+            with open_text_writer(input_dir / "train.jsonl.gz") as handle:
+                for record in train_records:
+                    write_jsonl_record(handle, record)
+            with open_text_writer(input_dir / "validation.jsonl.gz") as handle:
+                for record in validation_records:
+                    write_jsonl_record(handle, record)
+
+            first_output = root / "shuffled-a"
+            second_output = root / "shuffled-b"
+            stats = shuffle_processed_splits(
+                input_dir=input_dir,
+                output_dir=first_output,
+                seed=17,
+                bucket_count=3,
+                max_open_buckets=1,
+            )
+            shuffle_processed_splits(
+                input_dir=input_dir,
+                output_dir=second_output,
+                seed=17,
+                bucket_count=3,
+                max_open_buckets=1,
+            )
+
+            shuffled_train = list(iter_jsonl_records(first_output / "train.jsonl.gz"))
+            shuffled_validation = list(
+                iter_jsonl_records(first_output / "validation.jsonl.gz")
+            )
+            self.assertEqual(
+                [record["text"] for record in shuffled_train],
+                [
+                    record["text"]
+                    for record in iter_jsonl_records(second_output / "train.jsonl.gz")
+                ],
+            )
+            self.assertCountEqual(
+                [record["document_hash"] for record in shuffled_train],
+                [record["document_hash"] for record in train_records],
+            )
+            self.assertCountEqual(
+                [record["document_hash"] for record in shuffled_validation],
+                [record["document_hash"] for record in validation_records],
+            )
+            self.assertTrue(all(record["split"] == "train" for record in shuffled_train))
+            self.assertTrue(
+                all(record["split"] == "validation" for record in shuffled_validation)
+            )
+            self.assertEqual(
+                stats["splits"]["train"]["source_document_counts"],
+                {"code": 6, "math": 6},
+            )
+            self.assertEqual(
+                stats["splits"]["validation"]["source_document_counts"],
+                {"general_web": 7},
+            )
+            self.assertNotEqual(
+                [record["document_hash"] for record in shuffled_train],
+                [record["document_hash"] for record in train_records],
             )
 
 
@@ -1173,6 +1285,87 @@ class PrepareDataTests(unittest.TestCase):
                 validation_index.resolve().as_uri(),
             )
 
+    def test_prepare_data_tokenizes_shuffled_processed_records(self):
+        class FakeTokenizer:
+            eos_token_id = 0
+
+            def encode(self, text, add_special_tokens=False):
+                return [len(part) for part in text.split()]
+
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            local_path = root / "source.jsonl"
+            with local_path.open("w", encoding="utf-8") as handle:
+                for index in range(12):
+                    write_jsonl_record(
+                        handle,
+                        {"body": f"document {index} alpha beta gamma"},
+                    )
+
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "sample_mix",
+                        "target_tokens": 100,
+                        "tokenizer": "fake-tokenizer",
+                        "sources": [
+                            {
+                                "id": "local_sample",
+                                "weight": 1.0,
+                                "local_path": str(local_path),
+                                "text_field": "body",
+                                "enabled": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = prepare_data(
+                PrepareDataConfig(
+                    manifest_path=manifest_path,
+                    work_dir=root / "work",
+                    tokenizer_name="fake-tokenizer",
+                    target_shard_tokens=16,
+                    validation_rate=0.0,
+                    min_chars=5,
+                    processed_shuffle_seed=17,
+                    processed_shuffle_bucket_count=3,
+                    processed_shuffle_max_open_buckets=1,
+                    index_validation_mode="metadata",
+                ),
+                tokenizer_loader=lambda name: FakeTokenizer(),
+            )
+
+            original_records = list(
+                iter_jsonl_records(root / "work" / "processed_jsonl" / "train.jsonl.gz")
+            )
+            shuffled_path = (
+                root / "work" / "processed_jsonl_shuffled" / "train.jsonl.gz"
+            )
+            shuffled_records = list(iter_jsonl_records(shuffled_path))
+            self.assertEqual(
+                summary["tokenization_input_dir"],
+                str(root / "work" / "processed_jsonl_shuffled"),
+            )
+            self.assertEqual(
+                summary["processed_shuffle_stats"]["splits"]["train"]["documents"],
+                12,
+            )
+            self.assertCountEqual(
+                [record["document_hash"] for record in shuffled_records],
+                [record["document_hash"] for record in original_records],
+            )
+            self.assertNotEqual(
+                [record["document_hash"] for record in shuffled_records],
+                [record["document_hash"] for record in original_records],
+            )
+            self.assertTrue(
+                (root / "work" / "tokenized" / "train" / "index.json").exists()
+            )
+
     def test_prepare_data_plan_only_writes_audit_plans_without_downloads(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1211,6 +1404,97 @@ class PrepareDataTests(unittest.TestCase):
             self.assertTrue(Path(summary["blend_plan_path"]).exists())
             self.assertFalse((root / "work" / "raw_jsonl").exists())
 
+    def test_rebuild_tokenized_from_existing_processed_records_shuffles_first(self):
+        class FakeTokenizer:
+            eos_token_id = 0
+
+            def encode(self, text, add_special_tokens=False):
+                return [len(part) for part in text.split()]
+
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            processed_dir = root / "processed_jsonl"
+            processed_dir.mkdir()
+            with open_text_writer(processed_dir / "train.jsonl.gz") as handle:
+                for index in range(10):
+                    write_jsonl_record(
+                        handle,
+                        {
+                            "text": f"train document {index} alpha beta",
+                            "source_id": "local_sample",
+                            "split": "train",
+                            "document_hash": f"train-{index}",
+                        },
+                    )
+            with open_text_writer(processed_dir / "validation.jsonl.gz") as handle:
+                for index in range(4):
+                    write_jsonl_record(
+                        handle,
+                        {
+                            "text": f"validation document {index} gamma",
+                            "source_id": "local_sample",
+                            "split": "validation",
+                            "document_hash": f"validation-{index}",
+                        },
+                    )
+
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "sample_mix",
+                        "target_tokens": 100,
+                        "tokenizer": "fake-tokenizer",
+                        "sources": [
+                            {
+                                "id": "local_sample",
+                                "weight": 1.0,
+                                "local_path": str(root / "unused.jsonl"),
+                                "text_field": "body",
+                                "enabled": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = rebuild_tokenized_from_processed(
+                RebuildTokenizedConfig(
+                    manifest_path=manifest_path,
+                    processed_dir=processed_dir,
+                    work_dir=root / "work",
+                    tokenizer_name="fake-tokenizer",
+                    target_shard_tokens=16,
+                    shuffle_seed=17,
+                    shuffle_bucket_count=3,
+                    shuffle_max_open_buckets=1,
+                    index_validation_mode="metadata",
+                ),
+                tokenizer_loader=lambda name: FakeTokenizer(),
+            )
+
+            self.assertEqual(summary["status"], "completed")
+            self.assertEqual(
+                summary["tokenization_input_dir"],
+                str(root / "work" / "processed_jsonl_shuffled"),
+            )
+            self.assertTrue(
+                Path(summary["tokenized_indexes"]["train"]["path"]).exists()
+            )
+            self.assertTrue(
+                Path(summary["tokenized_indexes"]["validation"]["path"]).exists()
+            )
+            self.assertNotEqual(
+                [
+                    record["document_hash"]
+                    for record in iter_jsonl_records(
+                        root / "work" / "processed_jsonl_shuffled" / "train.jsonl.gz"
+                    )
+                ],
+                [f"train-{index}" for index in range(10)],
+            )
+
     def test_prepare_data_uses_blend_token_targets_when_tokenizing(self):
         class FakeTokenizer:
             eos_token_id = 0
@@ -1222,17 +1506,15 @@ class PrepareDataTests(unittest.TestCase):
             root = Path(tmpdir)
             local_path = root / "source.jsonl"
             with local_path.open("w", encoding="utf-8") as handle:
-                write_jsonl_record(
-                    handle,
-                    {"body": "alpha beta gamma delta epsilon zeta eta theta"},
-                )
+                write_jsonl_record(handle, {"body": "alpha beta"})
+                write_jsonl_record(handle, {"body": "gamma delta"})
 
             manifest_path = root / "manifest.json"
             manifest_path.write_text(
                 json.dumps(
                     {
                         "name": "sample_mix",
-                        "target_tokens": 3,
+                        "target_tokens": 4,
                         "tokenizer": "fake-tokenizer",
                         "sources": [
                             {
@@ -1255,7 +1537,7 @@ class PrepareDataTests(unittest.TestCase):
                     tokenizer_name="fake-tokenizer",
                     target_shard_tokens=8,
                     validation_rate=0.0,
-                    min_chars=20,
+                    min_chars=5,
                     index_validation_mode="metadata",
                 ),
                 tokenizer_loader=lambda name: FakeTokenizer(),
@@ -2022,7 +2304,7 @@ class TokenShardWriterTests(unittest.TestCase):
                 "math": 2,
             })
 
-    def test_tokenize_records_by_split_caps_train_tokens_by_source(self):
+    def test_tokenize_records_by_split_caps_train_tokens_by_source_without_truncating_documents(self):
         class FakeTokenizer:
             eos_token_id = 0
 
@@ -2064,16 +2346,16 @@ class TokenShardWriterTests(unittest.TestCase):
                 output_dir=output_dir,
                 tokenizer=FakeTokenizer(),
                 target_shard_tokens=8,
-                train_source_token_limits={"general_web": 3},
+                train_source_token_limits={"general_web": 6},
             )
 
-            self.assertEqual(indexes["train"]["total_tokens"], 3)
+            self.assertEqual(indexes["train"]["total_tokens"], 5)
             self.assertEqual(indexes["train"]["source_token_counts"], {
-                "general_web": 3,
+                "general_web": 5,
             })
             self.assertEqual(indexes["validation"]["total_tokens"], 3)
 
-    def test_tokenize_records_by_split_parallel_workers_preserve_token_caps(self):
+    def test_tokenize_records_by_split_parallel_workers_preserve_token_caps_without_truncating_documents(self):
         with TemporaryDirectory() as tmpdir:
             input_dir = Path(tmpdir) / "processed"
             input_dir.mkdir()
@@ -2114,14 +2396,88 @@ class TokenShardWriterTests(unittest.TestCase):
                 chunk_records=1,
             )
 
-            self.assertEqual(indexes["train"]["total_tokens"], 6)
+            self.assertEqual(indexes["train"]["total_tokens"], 5)
             self.assertEqual(indexes["train"]["source_token_counts"], {
-                "general_web": 6,
+                "general_web": 5,
             })
             self.assertEqual(indexes["validation"]["total_tokens"], 3)
             self.assertEqual(
                 [shard["tokens"] for shard in indexes["train"]["shards"]],
-                [4, 2],
+                [4, 1],
+            )
+
+    def test_tokenize_worker_batches_records_when_tokenizer_supports_batch_call(self):
+        tokenizer = _BatchFakeTokenizer()
+        tokenize_module._initialize_tokenizer_object_worker(tokenizer)
+
+        _, records = tokenize_module._tokenize_record_chunk_worker(
+            3,
+            [
+                {"text": "alpha beta", "source_id": "math", "split": "train"},
+                {"text": "gamma delta", "source_id": "code", "split": "validation"},
+            ],
+            True,
+        )
+
+        self.assertEqual(tokenizer.batch_calls, 1)
+        self.assertEqual(tokenizer.encode_calls, 0)
+        self.assertEqual(
+            records,
+            [
+                ("train", "math", [5, 4, 0]),
+                ("validation", "code", [5, 5, 0]),
+            ],
+        )
+
+    def test_parallel_tokenization_respects_max_pending_chunks_and_reports_progress(self):
+        with TemporaryDirectory() as tmpdir:
+            input_dir = Path(tmpdir) / "processed"
+            input_dir.mkdir()
+            with (input_dir / "mixed.jsonl").open("w", encoding="utf-8") as handle:
+                for index in range(6):
+                    write_jsonl_record(
+                        handle,
+                        {
+                            "text": f"document {index} alpha beta",
+                            "source_id": "general_web",
+                            "split": "train",
+                        },
+                    )
+
+            events = []
+            indexes = tokenize_records_by_split(
+                input_dir=input_dir,
+                output_dir=Path(tmpdir) / "tokenized",
+                tokenizer=_FakeTokenizer(),
+                target_shard_tokens=64,
+                workers=2,
+                chunk_records=1,
+                max_pending_chunks=3,
+                progress_callback=events.append,
+            )
+
+            self.assertEqual(indexes["train"]["total_tokens"], 30)
+            submitted = [
+                event
+                for event in events
+                if event.get("event") == "tokenize_chunk_submitted"
+            ]
+            completed = [
+                event
+                for event in events
+                if event.get("event") == "tokenize_chunk_completed"
+            ]
+            consumed = [
+                event
+                for event in events
+                if event.get("event") == "tokenize_chunk_consumed"
+            ]
+            self.assertEqual(len(submitted), 6)
+            self.assertEqual(len(completed), 6)
+            self.assertEqual(len(consumed), 6)
+            self.assertLessEqual(
+                max(event["pending_chunks"] for event in submitted),
+                3,
             )
 
     def test_load_tokenized_index_validates_hashes_and_reads_tokens(self):
@@ -2250,6 +2606,10 @@ class ScriptPackagingTests(unittest.TestCase):
         self.assertIn("SCALING_DOWNLOAD_WORKERS", script)
         self.assertIn("SCALING_DOWNLOAD_SHARDS_PER_SOURCE", script)
         self.assertIn("SCALING_DOWNLOAD_SOURCE_PARALLELISM", script)
+        self.assertIn("SCALING_TOKENIZE_MAX_PENDING_CHUNKS", script)
+        self.assertIn("SCALING_PROCESSED_SHUFFLE_SEED", script)
+        self.assertIn("SCALING_PROCESSED_SHUFFLE_BUCKET_COUNT", script)
+        self.assertIn("SCALING_NO_SHUFFLE_PROCESSED_RECORDS", script)
         self.assertIn("SCALING_NO_RESUME_DOWNLOADS", script)
         self.assertIn("execution_root/data_work", script)
         self.assertNotIn("project_rootdir/data_work", script)
@@ -2351,6 +2711,31 @@ class ScriptPackagingTests(unittest.TestCase):
                 {"code": 4, "math": 4},
             )
 
+    def test_rebuild_tokenized_launcher_uses_existing_processed_dir(self):
+        data_root = Path(__file__).resolve().parents[1]
+        script_path = data_root / "scripts" / "rebuild_tokenized_from_processed.sh"
+        script = script_path.read_text(encoding="utf-8")
+
+        self.assertIn("SCALING_PROCESSED_JSONL_DIR", script)
+        self.assertIn("python -m scaling_data.rebuild_tokenized", script)
+        self.assertIn("SCALING_PROCESSED_SHUFFLE_SEED", script)
+        self.assertIn("SCALING_TOKENIZE_WORKERS", script)
+        self.assertIn("SCALING_TOKENIZE_MAX_PENDING_CHUNKS", script)
+        self.assertNotIn("HF_TOKEN", script)
+
+    def test_pyproject_exposes_processed_shuffle_and_rebuild_entrypoints(self):
+        data_root = Path(__file__).resolve().parents[1]
+        pyproject = (data_root / "pyproject.toml").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'scaling-shuffle-processed-data = "scaling_data.shuffle_processed:main"',
+            pyproject,
+        )
+        self.assertIn(
+            'scaling-rebuild-tokenized-data = "scaling_data.rebuild_tokenized:main"',
+            pyproject,
+        )
+
     def test_deployment_bundle_contains_only_data_package_artifacts(self):
         data_root = Path(__file__).resolve().parents[1]
         script_path = data_root / "scripts" / "build_deployment_bundle.sh"
@@ -2369,8 +2754,11 @@ class ScriptPackagingTests(unittest.TestCase):
                 names = set(archive.getnames())
 
             self.assertIn("data/scaling_data/prepare.py", names)
+            self.assertIn("data/scaling_data/rebuild_tokenized.py", names)
+            self.assertIn("data/scaling_data/shuffle_processed.py", names)
             self.assertIn("data/scaling_data/shuffle_tokenized.py", names)
             self.assertIn("data/scripts/prepare_full_data.sh", names)
+            self.assertIn("data/scripts/rebuild_tokenized_from_processed.sh", names)
             self.assertIn("data/scripts/shuffle_tokenized_train.sh", names)
             self.assertIn("data/manifests/general_100b_mix.json", names)
             self.assertNotIn("data/scaling_data/__pycache__", names)

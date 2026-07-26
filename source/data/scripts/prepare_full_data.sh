@@ -30,6 +30,14 @@ fi
 export PYTHONPATH="$data_package_root${PYTHONPATH:+:$PYTHONPATH}"
 export HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-$HF_TOKEN}"
 
+default_cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '8')"
+case "$default_cpu_count" in
+  ''|*[!0-9]*) default_cpu_count=8 ;;
+esac
+if (( default_cpu_count < 1 )); then
+  default_cpu_count=8
+fi
+
 manifest="${SCALING_DATA_MANIFEST:-$data_package_root/manifests/general_100b_mix.json}"
 work_dir="${SCALING_DATA_WORK_DIR:-$execution_root/data_work}"
 tokenizer="${SCALING_DATA_TOKENIZER:-EleutherAI/gpt-neox-20b}"
@@ -43,8 +51,13 @@ download_workers="${SCALING_DOWNLOAD_WORKERS:-4}"
 download_shards_per_source="${SCALING_DOWNLOAD_SHARDS_PER_SOURCE:-4}"
 download_source_parallelism="${SCALING_DOWNLOAD_SOURCE_PARALLELISM:-1}"
 postprocess_workers="${SCALING_POSTPROCESS_WORKERS:-$download_workers}"
-tokenize_workers="${SCALING_TOKENIZE_WORKERS:-$download_workers}"
-tokenize_chunk_records="${SCALING_TOKENIZE_CHUNK_RECORDS:-512}"
+tokenize_workers="${SCALING_TOKENIZE_WORKERS:-$default_cpu_count}"
+tokenize_chunk_records="${SCALING_TOKENIZE_CHUNK_RECORDS:-4096}"
+tokenize_max_pending_chunks="${SCALING_TOKENIZE_MAX_PENDING_CHUNKS:-$((tokenize_workers * 4))}"
+tokenize_progress_every_chunks="${SCALING_TOKENIZE_PROGRESS_EVERY_CHUNKS:-100}"
+processed_shuffle_seed="${SCALING_PROCESSED_SHUFFLE_SEED:-20260724}"
+processed_shuffle_bucket_count="${SCALING_PROCESSED_SHUFFLE_BUCKET_COUNT:-4096}"
+processed_shuffle_max_open_buckets="${SCALING_PROCESSED_SHUFFLE_MAX_OPEN_BUCKETS:-64}"
 
 if [[ ! -f "$manifest" ]]; then
   echo "Data manifest does not exist: $manifest" >&2
@@ -62,6 +75,11 @@ extra_args=(
   --postprocess-workers "$postprocess_workers"
   --tokenize-workers "$tokenize_workers"
   --tokenize-chunk-records "$tokenize_chunk_records"
+  --tokenize-max-pending-chunks "$tokenize_max_pending_chunks"
+  --tokenize-progress-every-chunks "$tokenize_progress_every_chunks"
+  --processed-shuffle-seed "$processed_shuffle_seed"
+  --processed-shuffle-bucket-count "$processed_shuffle_bucket_count"
+  --processed-shuffle-max-open-buckets "$processed_shuffle_max_open_buckets"
 )
 
 if [[ -n "${SCALING_MAX_DOCS_PER_SOURCE:-}" ]]; then
@@ -74,6 +92,10 @@ fi
 
 if [[ "${SCALING_NO_RESUME_DOWNLOADS:-0}" == "1" ]]; then
   extra_args+=(--no-resume-downloads)
+fi
+
+if [[ "${SCALING_NO_SHUFFLE_PROCESSED_RECORDS:-0}" == "1" ]]; then
+  extra_args+=(--no-shuffle-processed-records)
 fi
 
 exec python -m scaling_data.prepare \

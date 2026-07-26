@@ -8,7 +8,7 @@ from array import array
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
-from typing import Iterator, Mapping
+from typing import Callable, Iterator, Mapping
 
 from scaling_data.io import iter_input_files, iter_jsonl_records
 
@@ -104,6 +104,8 @@ def tokenize_directory(
     train_source_token_limits: Mapping[str, int] | None = None,
     workers: int = 1,
     chunk_records: int = DEFAULT_TOKENIZE_CHUNK_RECORDS,
+    max_pending_chunks: int | None = None,
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> dict:
     worker_count = _normalize_workers(workers, field_name="workers")
     if worker_count > 1:
@@ -115,6 +117,8 @@ def tokenize_directory(
             train_source_token_limits=train_source_token_limits,
             workers=worker_count,
             chunk_records=chunk_records,
+            max_pending_chunks=max_pending_chunks,
+            progress_callback=progress_callback,
             initializer=_initialize_named_tokenizer_worker,
             initargs=(tokenizer_name,),
         )
@@ -134,6 +138,8 @@ def tokenize_directory(
         train_source_token_limits=train_source_token_limits,
         workers=1,
         chunk_records=chunk_records,
+        max_pending_chunks=max_pending_chunks,
+        progress_callback=progress_callback,
     )
 
 
@@ -147,6 +153,8 @@ def tokenize_records_by_split(
     train_source_token_limits: Mapping[str, int] | None = None,
     workers: int = 1,
     chunk_records: int = DEFAULT_TOKENIZE_CHUNK_RECORDS,
+    max_pending_chunks: int | None = None,
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> dict[str, dict]:
     worker_count = _normalize_workers(workers, field_name="workers")
     if worker_count > 1:
@@ -158,6 +166,8 @@ def tokenize_records_by_split(
             train_source_token_limits=train_source_token_limits,
             workers=worker_count,
             chunk_records=chunk_records,
+            max_pending_chunks=max_pending_chunks,
+            progress_callback=progress_callback,
             initializer=_initialize_tokenizer_object_worker,
             initargs=(tokenizer,),
         )
@@ -202,7 +212,7 @@ def tokenize_records_by_split(
                     if remaining <= 0:
                         continue
                     if len(normalized_token_ids) > remaining:
-                        normalized_token_ids = normalized_token_ids[:remaining]
+                        continue
                     train_source_token_counts[normalized_source_id] += len(
                         normalized_token_ids
                     )
@@ -228,6 +238,8 @@ def _tokenize_records_by_split_parallel(
     train_source_token_limits: Mapping[str, int] | None,
     workers: int,
     chunk_records: int,
+    max_pending_chunks: int | None,
+    progress_callback: Callable[[dict], None] | None,
     initializer,
     initargs: tuple,
 ) -> dict[str, dict]:
@@ -256,7 +268,7 @@ def _tokenize_records_by_split_parallel(
                     if remaining <= 0:
                         continue
                     if len(token_ids) > remaining:
-                        token_ids = token_ids[:remaining]
+                        continue
                     train_source_token_counts[normalized_source_id] += len(token_ids)
             if not token_ids:
                 continue
@@ -270,7 +282,10 @@ def _tokenize_records_by_split_parallel(
     buffered: dict[int, list[tuple[str, str, list[int]]]] = {}
     next_chunk_to_consume = 0
     exhausted = False
-    max_pending = max(1, workers * 2)
+    max_pending = _resolve_max_pending_chunks(
+        max_pending_chunks,
+        workers=workers,
+    )
 
     def submit_next(executor) -> None:
         nonlocal exhausted
@@ -287,7 +302,16 @@ def _tokenize_records_by_split_parallel(
             records,
             append_eos,
         )
-        pending[future] = chunk_index
+        pending[future] = (chunk_index, len(records))
+        _emit_progress(
+            progress_callback,
+            {
+                "event": "tokenize_chunk_submitted",
+                "chunk_index": chunk_index,
+                "records": len(records),
+                "pending_chunks": len(pending),
+            },
+        )
 
     with ProcessPoolExecutor(
         max_workers=workers,
@@ -302,15 +326,37 @@ def _tokenize_records_by_split_parallel(
         while pending:
             completed, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in completed:
-                chunk_index = pending.pop(future)
+                chunk_index, record_count = pending.pop(future)
                 result_index, tokenized_records = future.result()
                 if result_index != chunk_index:
                     raise RuntimeError("tokenizer worker returned an unexpected chunk")
                 buffered[result_index] = tokenized_records
+                _emit_progress(
+                    progress_callback,
+                    {
+                        "event": "tokenize_chunk_completed",
+                        "chunk_index": chunk_index,
+                        "records": record_count,
+                        "tokenized_records": len(tokenized_records),
+                        "pending_chunks": len(pending),
+                        "buffered_chunks": len(buffered),
+                    },
+                )
                 submit_next(executor)
 
             while next_chunk_to_consume in buffered:
-                consume_tokenized_records(buffered.pop(next_chunk_to_consume))
+                tokenized_records = buffered.pop(next_chunk_to_consume)
+                consume_tokenized_records(tokenized_records)
+                _emit_progress(
+                    progress_callback,
+                    {
+                        "event": "tokenize_chunk_consumed",
+                        "chunk_index": next_chunk_to_consume,
+                        "tokenized_records": len(tokenized_records),
+                        "pending_chunks": len(pending),
+                        "buffered_chunks": len(buffered),
+                    },
+                )
                 next_chunk_to_consume += 1
 
     return {
@@ -337,6 +383,20 @@ def _iter_tokenize_record_chunks(
         yield chunk_index, records
 
 
+def _resolve_max_pending_chunks(value: int | None, *, workers: int) -> int:
+    if value is None:
+        return max(1, workers * 4)
+    return _normalize_workers(value, field_name="max_pending_chunks")
+
+
+def _emit_progress(
+    progress_callback: Callable[[dict], None] | None,
+    event: dict,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(event)
+
+
 def _initialize_named_tokenizer_worker(tokenizer_name: str) -> None:
     try:
         from transformers import AutoTokenizer
@@ -358,14 +418,11 @@ def _tokenize_record_chunk_worker(
     if _TOKENIZER_WORKER is None:
         raise RuntimeError("tokenizer worker was not initialized")
     eos_token_id = _TOKENIZER_WORKER.eos_token_id
-    tokenized_records: list[tuple[str, str, list[int]]] = []
+    records_to_encode: list[tuple[str, str, str]] = []
     for record in records:
         text = record.get("text")
         if not isinstance(text, str) or not text:
             continue
-        token_ids = _TOKENIZER_WORKER.encode(text, add_special_tokens=False)
-        if append_eos and eos_token_id is not None:
-            token_ids.append(eos_token_id)
         source_id = record.get("source_id")
         split = record.get("split")
         normalized_split = split if split in {"train", "validation"} else "train"
@@ -374,6 +431,21 @@ def _tokenize_record_chunk_worker(
         )
         if not normalized_source_id:
             normalized_source_id = "unknown"
+        records_to_encode.append((text, normalized_split, normalized_source_id))
+
+    tokenized_records: list[tuple[str, str, list[int]]] = []
+    token_sequences = _encode_text_batch(
+        _TOKENIZER_WORKER,
+        [text for text, _, _ in records_to_encode],
+    )
+    if len(token_sequences) != len(records_to_encode):
+        raise RuntimeError("tokenizer returned the wrong number of token sequences")
+    for (_, normalized_split, normalized_source_id), token_ids in zip(
+        records_to_encode,
+        token_sequences,
+    ):
+        if append_eos and eos_token_id is not None:
+            token_ids.append(eos_token_id)
         normalized_token_ids = [int(token_id) for token_id in token_ids]
         if normalized_token_ids:
             tokenized_records.append(
@@ -384,6 +456,38 @@ def _tokenize_record_chunk_worker(
                 )
             )
     return chunk_index, tokenized_records
+
+
+def _encode_text_batch(tokenizer, texts: list[str]) -> list[list[int]]:
+    if not texts:
+        return []
+    if callable(tokenizer):
+        try:
+            encoded = tokenizer(texts, add_special_tokens=False)
+        except TypeError:
+            encoded = None
+        input_ids = _input_ids_from_batch_encoding(encoded)
+        if input_ids is not None and len(input_ids) == len(texts):
+            return [[int(token_id) for token_id in token_ids] for token_ids in input_ids]
+    return [
+        [int(token_id) for token_id in tokenizer.encode(text, add_special_tokens=False)]
+        for text in texts
+    ]
+
+
+def _input_ids_from_batch_encoding(encoded) -> list | None:
+    if encoded is None:
+        return None
+    if isinstance(encoded, dict):
+        input_ids = encoded.get("input_ids")
+    else:
+        input_ids = getattr(encoded, "input_ids", None)
+    if input_ids is None:
+        return None
+    try:
+        return list(input_ids)
+    except TypeError:
+        return None
 
 
 def _normalize_train_source_token_limits(
@@ -555,6 +659,7 @@ def main() -> None:
     parser.add_argument("--no-eos", action="store_true")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--chunk-records", type=int, default=DEFAULT_TOKENIZE_CHUNK_RECORDS)
+    parser.add_argument("--max-pending-chunks", type=int)
     args = parser.parse_args()
 
     index = tokenize_directory(
@@ -565,6 +670,7 @@ def main() -> None:
         append_eos=not args.no_eos,
         workers=args.workers,
         chunk_records=args.chunk_records,
+        max_pending_chunks=args.max_pending_chunks,
     )
     print(json.dumps(index, indent=2))
 

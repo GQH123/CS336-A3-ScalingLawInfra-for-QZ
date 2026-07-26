@@ -20,6 +20,8 @@ full = [
 [project.scripts]
 scaling-prepare-data = "scaling_data.prepare:main"
 scaling-package-lifecycle-data = "scaling_data.lifecycle_dataset:main"
+scaling-rebuild-tokenized-data = "scaling_data.rebuild_tokenized:main"
+scaling-shuffle-processed-data = "scaling_data.shuffle_processed:main"
 scaling-shuffle-tokenized-data = "scaling_data.shuffle_tokenized:main"
 
 [tool.setuptools.packages.find]

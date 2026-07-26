@@ -119,14 +119,67 @@ storage path is required:
 export SCALING_DATA_WORK_DIR="/mnt/course-data/scaling-data-build/data_work"
 ```
 
-## Shuffle an Existing Tokenized Corpus
+## Document-Preserving Shuffle and Rebuild
 
-If the expensive tokenization stage has already completed, do not re-run
-download, post-processing, or tokenization just to fix source-blocked training
-order. Use the tokenized-corpus shuffle patch instead. It reads the existing
-`train/index.json` plus `tokens-*.bin` files, copies fixed-size token byte
-ranges into a new deterministic source-balanced order, and writes a fresh
-standard tokenized `index.json`.
+The canonical build shuffles processed JSONL records before tokenization. This
+keeps train and validation split membership unchanged, shuffles each split
+separately, and moves only whole documents. The full launcher enables this by
+default after post-processing:
+
+```text
+raw_jsonl -> processed_jsonl -> processed_jsonl_shuffled -> tokenized
+```
+
+The shuffled record files are written to
+`data_work/processed_jsonl_shuffled/train.jsonl.gz` and
+`data_work/processed_jsonl_shuffled/validation.jsonl.gz`. Fresh binary indexes
+are then built under `data_work/tokenized/train/` and
+`data_work/tokenized/validation/`.
+
+If `data_work/processed_jsonl` already exists and you only want to redo the
+shuffle and binary construction, use the rebuild launcher. It does not require
+`HF_TOKEN` and does not redownload or re-postprocess data:
+
+```bash
+data_package_root="/home/qhgao/.workspace/projects/fnlp-summer-training-2026/assignment-3-data-package"
+export SCALING_DATA_PACKAGE_ROOT="$data_package_root"
+
+export SCALING_DATA_WORK_DIR="$PWD/data_work"
+export SCALING_PROCESSED_JSONL_DIR="$PWD/data_work/processed_jsonl"
+export SCALING_DATA_MANIFEST="$data_package_root/manifests/general_100b_mix.json"
+export SCALING_DATA_TOKENIZER=EleutherAI/gpt-neox-20b
+export SCALING_TARGET_SHARD_TOKENS=100000000
+export SCALING_PROCESSED_SHUFFLE_SEED=20260724
+export SCALING_PROCESSED_SHUFFLE_BUCKET_COUNT=4096
+export SCALING_TOKENIZE_WORKERS=32
+export SCALING_TOKENIZE_CHUNK_RECORDS=4096
+export SCALING_TOKENIZE_MAX_PENDING_CHUNKS=128
+
+"$data_package_root/scripts/rebuild_tokenized_from_processed.sh"
+```
+
+Use a different `SCALING_PROCESSED_SHUFFLE_SEED` only when intentionally
+creating a new dataset order. Keep the same seed for repeatable exploratory and
+final builds. The shuffle is split-local, so train documents are shuffled only
+with train documents and validation documents only with validation documents.
+
+During tokenization, per-source train token limits are upper bounds. If the next
+whole document would exceed a source's remaining budget, it is skipped rather
+than truncated. This preserves document boundaries and can undershoot a source
+target by less than one retained document.
+
+## Emergency Shuffle of an Existing Tokenized Corpus
+
+The older tokenized-corpus shuffle can still be used for either split by
+pointing `SCALING_TOKENIZED_INPUT_INDEX` and `SCALING_TOKENIZED_OUTPUT_DIR` at
+the desired `index.json`. It is useful when the original processed JSONL is not
+available or there is no time to retokenize. It reads existing `tokens-*.bin`
+files, copies fixed-size token byte ranges into a new deterministic
+source-balanced order, and writes a fresh standard tokenized `index.json`.
+
+Because it shuffles token ranges rather than JSONL records, it can split an
+original document across chunk boundaries. Prefer the document-preserving
+processed-record rebuild above when processed JSONL is available.
 
 From the data-build working directory:
 
@@ -227,15 +280,28 @@ replacement in that same worker process. The parent process keeps the scheduler
 filled, records queued/running/completed state, and aggregates failures after
 the scheduled shard work finishes.
 
-Post-processing and tokenization also use process pools by default in the full
-launcher. `SCALING_POSTPROCESS_WORKERS` and `SCALING_TOKENIZE_WORKERS` default
-to `SCALING_DOWNLOAD_WORKERS` when unset. Post-processing workers clean and hash
-per-input-file candidates; the parent process still performs the final
-deterministic global dedupe merge. Tokenization workers encode chunks of
-processed records; the parent process still enforces per-source token caps and
-writes the final shard indexes in stable order. Tune tokenization task size with
-`SCALING_TOKENIZE_CHUNK_RECORDS` if worker dispatch overhead or memory use needs
-adjustment.
+Post-processing and tokenization also use process pools in the full launcher.
+`SCALING_POSTPROCESS_WORKERS` defaults to `SCALING_DOWNLOAD_WORKERS`.
+`SCALING_TOKENIZE_WORKERS` now defaults to the machine CPU count, because
+tokenization is CPU-heavy and should not be limited by the download worker
+count. Override it when the storage mount, tokenizer memory use, or other
+co-located work needs a lower ceiling:
+
+```bash
+export SCALING_TOKENIZE_WORKERS=32
+export SCALING_TOKENIZE_CHUNK_RECORDS=4096
+export SCALING_TOKENIZE_MAX_PENDING_CHUNKS=128
+```
+
+Tokenization workers encode record batches when the tokenizer exposes a batch
+call, falling back to per-record `encode` only for simple tokenizer objects. The
+parent process keeps up to `SCALING_TOKENIZE_MAX_PENDING_CHUNKS` submitted tasks
+in flight, consumes completed chunks in deterministic input order, enforces
+document-preserving per-source train token caps, and writes the final shard
+indexes. Increase `SCALING_TOKENIZE_CHUNK_RECORDS` when dispatch overhead is
+visible; decrease it if each worker task holds too much text or token output in
+memory. When progress is enabled, tokenization status is printed every
+`SCALING_TOKENIZE_PROGRESS_EVERY_CHUNKS` consumed chunks, defaulting to `100`.
 
 For a quick source-health smoke test, use a small per-source document cap, one
 download shard per source, and several active sources:

@@ -20,6 +20,11 @@ from scaling_data.download import (
 )
 from scaling_data.pipeline import write_pipeline_plan
 from scaling_data.postprocess import postprocess_directory
+from scaling_data.shuffle_processed import (
+    DEFAULT_MAX_OPEN_BUCKETS,
+    DEFAULT_PROCESSED_SHUFFLE_BUCKETS,
+    shuffle_processed_splits,
+)
 from scaling_data.tokenize import (
     DEFAULT_TOKENIZE_CHUNK_RECORDS,
     load_tokenized_index,
@@ -46,6 +51,12 @@ class PrepareDataConfig:
     postprocess_workers: int | None = None
     tokenize_workers: int | None = None
     tokenize_chunk_records: int = DEFAULT_TOKENIZE_CHUNK_RECORDS
+    tokenize_max_pending_chunks: int | None = None
+    tokenize_progress_every_chunks: int = 100
+    shuffle_processed_records: bool = True
+    processed_shuffle_seed: int = 20260724
+    processed_shuffle_bucket_count: int = DEFAULT_PROCESSED_SHUFFLE_BUCKETS
+    processed_shuffle_max_open_buckets: int = DEFAULT_MAX_OPEN_BUCKETS
     resume_downloads: bool = True
     progress_every_docs: int = 1_000
     index_validation_mode: str = "metadata"
@@ -91,6 +102,7 @@ def prepare_data(
 
     raw_dir = config.work_dir / "raw_jsonl"
     processed_dir = config.work_dir / "processed_jsonl"
+    shuffled_processed_dir = config.work_dir / "processed_jsonl_shuffled"
     tokenized_dir = config.work_dir / "tokenized"
     plan_dir = config.work_dir / "plans"
 
@@ -123,6 +135,25 @@ def prepare_data(
         config.tokenize_chunk_records,
         field_name="tokenize_chunk_records",
     )
+    resolved_tokenize_max_pending_chunks = _resolve_tokenize_max_pending_chunks(
+        config.tokenize_max_pending_chunks,
+        workers=resolved_tokenize_workers,
+    )
+    resolved_tokenize_progress_every_chunks = _normalize_positive_int(
+        config.tokenize_progress_every_chunks,
+        field_name="tokenize_progress_every_chunks",
+    )
+    resolved_processed_shuffle_bucket_count = _normalize_positive_int(
+        config.processed_shuffle_bucket_count,
+        field_name="processed_shuffle_bucket_count",
+    )
+    resolved_processed_shuffle_max_open_buckets = _normalize_positive_int(
+        config.processed_shuffle_max_open_buckets,
+        field_name="processed_shuffle_max_open_buckets",
+    )
+    tokenization_input_dir = (
+        shuffled_processed_dir if config.shuffle_processed_records else processed_dir
+    )
     summary: dict[str, Any] = {
         "status": "planned",
         "manifest_name": manifest["name"],
@@ -141,6 +172,15 @@ def prepare_data(
         "postprocess_workers": resolved_postprocess_workers,
         "tokenize_workers": resolved_tokenize_workers,
         "tokenize_chunk_records": resolved_tokenize_chunk_records,
+        "tokenize_max_pending_chunks": resolved_tokenize_max_pending_chunks,
+        "tokenize_progress_every_chunks": resolved_tokenize_progress_every_chunks,
+        "processed_records_shuffled": config.shuffle_processed_records,
+        "processed_dir": str(processed_dir),
+        "shuffled_processed_dir": str(shuffled_processed_dir),
+        "tokenization_input_dir": str(tokenization_input_dir),
+        "processed_shuffle_seed": int(config.processed_shuffle_seed),
+        "processed_shuffle_bucket_count": resolved_processed_shuffle_bucket_count,
+        "processed_shuffle_max_open_buckets": resolved_processed_shuffle_max_open_buckets,
         "resume_downloads": config.resume_downloads,
     }
     if config.plan_only:
@@ -189,19 +229,56 @@ def prepare_data(
             file=sys.stderr,
             flush=True,
         )
+    processed_shuffle_stats: dict[str, Any] = {}
+    if config.shuffle_processed_records:
+        if config.show_progress:
+            print(
+                (
+                    f"[prepare] shuffling processed JSONL records from {processed_dir} "
+                    f"into {shuffled_processed_dir}"
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+        processed_shuffle_stats = shuffle_processed_splits(
+            input_dir=processed_dir,
+            output_dir=shuffled_processed_dir,
+            seed=int(config.processed_shuffle_seed),
+            bucket_count=resolved_processed_shuffle_bucket_count,
+            max_open_buckets=resolved_processed_shuffle_max_open_buckets,
+            overwrite=True,
+        )
+        if config.show_progress:
+            print(
+                f"[prepare] processed shuffle complete stats={processed_shuffle_stats}",
+                file=sys.stderr,
+                flush=True,
+            )
+    tokenization_input_dir = (
+        shuffled_processed_dir if config.shuffle_processed_records else processed_dir
+    )
+    summary["tokenization_input_dir"] = str(tokenization_input_dir)
+    summary["processed_shuffle_stats"] = processed_shuffle_stats
+    if config.show_progress:
         print(
-            f"[prepare] tokenizing processed records into {tokenized_dir}",
+            f"[prepare] tokenizing processed records from {tokenization_input_dir} "
+            f"into {tokenized_dir}",
             file=sys.stderr,
             flush=True,
         )
     indexes = _tokenize_processed_records(
-        input_dir=processed_dir,
+        input_dir=tokenization_input_dir,
         output_dir=tokenized_dir,
         tokenizer_name=tokenizer_name,
         target_shard_tokens=config.target_shard_tokens,
         train_source_token_limits=train_source_token_limits,
         workers=resolved_tokenize_workers,
         chunk_records=resolved_tokenize_chunk_records,
+        max_pending_chunks=resolved_tokenize_max_pending_chunks,
+        progress_callback=_tokenize_progress_callback(
+            enabled=config.show_progress,
+            every_chunks=resolved_tokenize_progress_every_chunks,
+        ),
         tokenizer_loader=tokenizer_loader,
     )
     tokenized_indexes = _tokenized_index_summary(
@@ -226,6 +303,11 @@ def prepare_data(
         train_source_token_limits=train_source_token_limits,
         download_token_budgets=download_token_budgets,
         download_stats=download_stats,
+        processed_records_shuffled=config.shuffle_processed_records,
+        processed_dir=processed_dir,
+        shuffled_processed_dir=shuffled_processed_dir,
+        tokenization_input_dir=tokenization_input_dir,
+        processed_shuffle_stats=processed_shuffle_stats,
         tokenized_indexes=tokenized_indexes,
     )
     prepared_manifest_path = config.work_dir / "prepared-data-manifest.json"
@@ -240,6 +322,7 @@ def prepare_data(
             "raw_paths": raw_paths,
             "download_stats": download_stats,
             "postprocess_stats": postprocess_stats,
+            "processed_shuffle_stats": processed_shuffle_stats,
             "tokenized_indexes": tokenized_indexes,
         }
     )
@@ -286,6 +369,39 @@ def main(
         type=int,
         default=DEFAULT_TOKENIZE_CHUNK_RECORDS,
         help="Processed JSONL records per tokenization process task.",
+    )
+    parser.add_argument(
+        "--tokenize-max-pending-chunks",
+        type=int,
+        help=(
+            "Maximum submitted tokenization tasks waiting in the process pool. "
+            "Defaults to four times --tokenize-workers."
+        ),
+    )
+    parser.add_argument(
+        "--tokenize-progress-every-chunks",
+        type=int,
+        default=100,
+        help="When progress is enabled, print tokenization status every N chunks.",
+    )
+    parser.add_argument(
+        "--no-shuffle-processed-records",
+        action="store_true",
+        help=(
+            "Tokenize processed JSONL in its original postprocess order instead "
+            "of first shuffling whole records within each split."
+        ),
+    )
+    parser.add_argument("--processed-shuffle-seed", type=int, default=20260724)
+    parser.add_argument(
+        "--processed-shuffle-bucket-count",
+        type=int,
+        default=DEFAULT_PROCESSED_SHUFFLE_BUCKETS,
+    )
+    parser.add_argument(
+        "--processed-shuffle-max-open-buckets",
+        type=int,
+        default=DEFAULT_MAX_OPEN_BUCKETS,
     )
     parser.add_argument(
         "--no-resume-downloads",
@@ -337,6 +453,12 @@ def main(
             postprocess_workers=args.postprocess_workers,
             tokenize_workers=args.tokenize_workers,
             tokenize_chunk_records=args.tokenize_chunk_records,
+            tokenize_max_pending_chunks=args.tokenize_max_pending_chunks,
+            tokenize_progress_every_chunks=args.tokenize_progress_every_chunks,
+            shuffle_processed_records=not args.no_shuffle_processed_records,
+            processed_shuffle_seed=args.processed_shuffle_seed,
+            processed_shuffle_bucket_count=args.processed_shuffle_bucket_count,
+            processed_shuffle_max_open_buckets=args.processed_shuffle_max_open_buckets,
             resume_downloads=not args.no_resume_downloads,
             progress_every_docs=args.progress_every_docs,
             index_validation_mode=args.index_validation_mode,
@@ -859,6 +981,58 @@ def _normalize_positive_int(value: int, *, field_name: str) -> int:
     return parsed
 
 
+def _resolve_tokenize_max_pending_chunks(
+    value: int | None,
+    *,
+    workers: int,
+) -> int:
+    if value is None:
+        return max(1, workers * 4)
+    return _normalize_positive_int(value, field_name="tokenize_max_pending_chunks")
+
+
+def _tokenize_progress_callback(
+    *,
+    enabled: bool,
+    every_chunks: int,
+) -> Callable[[dict], None] | None:
+    if not enabled:
+        return None
+    counters = {
+        "submitted": 0,
+        "completed": 0,
+        "consumed": 0,
+    }
+
+    def callback(event: dict) -> None:
+        event_name = event.get("event")
+        if event_name == "tokenize_chunk_submitted":
+            counters["submitted"] += 1
+            return
+        if event_name == "tokenize_chunk_completed":
+            counters["completed"] += 1
+            return
+        if event_name != "tokenize_chunk_consumed":
+            return
+        counters["consumed"] += 1
+        if counters["consumed"] != 1 and counters["consumed"] % every_chunks != 0:
+            return
+        print(
+            (
+                "[tokenize] "
+                f"submitted_chunks={counters['submitted']} "
+                f"completed_chunks={counters['completed']} "
+                f"consumed_chunks={counters['consumed']} "
+                f"pending_chunks={event.get('pending_chunks', 0)} "
+                f"buffered_chunks={event.get('buffered_chunks', 0)}"
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return callback
+
+
 def _collect_download_stats(
     *,
     source_id: str,
@@ -907,6 +1081,8 @@ def _tokenize_processed_records(
     train_source_token_limits: Mapping[str, int],
     workers: int,
     chunk_records: int,
+    max_pending_chunks: int,
+    progress_callback: Callable[[dict], None] | None,
     tokenizer_loader: Callable[[str], Any] | None,
 ) -> dict[str, dict]:
     if tokenizer_loader is None:
@@ -918,6 +1094,8 @@ def _tokenize_processed_records(
             train_source_token_limits=train_source_token_limits,
             workers=workers,
             chunk_records=chunk_records,
+            max_pending_chunks=max_pending_chunks,
+            progress_callback=progress_callback,
         )
     return tokenize_records_by_split(
         input_dir=input_dir,
@@ -927,6 +1105,8 @@ def _tokenize_processed_records(
         train_source_token_limits=train_source_token_limits,
         workers=workers,
         chunk_records=chunk_records,
+        max_pending_chunks=max_pending_chunks,
+        progress_callback=progress_callback,
     )
 
 
@@ -962,6 +1142,11 @@ def _prepared_manifest(
     train_source_token_limits: Mapping[str, int],
     download_token_budgets: Mapping[str, int],
     download_stats: Mapping[str, Mapping[str, Any]],
+    processed_records_shuffled: bool,
+    processed_dir: Path,
+    shuffled_processed_dir: Path,
+    tokenization_input_dir: Path,
+    processed_shuffle_stats: Mapping[str, Any],
     tokenized_indexes: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
     return {
@@ -976,6 +1161,20 @@ def _prepared_manifest(
         "max_chars": config.max_chars,
         "raw_paths": raw_paths,
         "postprocess_stats": dict(postprocess_stats),
+        "processed_records_shuffled": bool(processed_records_shuffled),
+        "processed_dir": str(processed_dir),
+        "shuffled_processed_dir": str(shuffled_processed_dir),
+        "tokenization_input_dir": str(tokenization_input_dir),
+        "processed_shuffle_seed": int(config.processed_shuffle_seed),
+        "processed_shuffle_bucket_count": _normalize_positive_int(
+            config.processed_shuffle_bucket_count,
+            field_name="processed_shuffle_bucket_count",
+        ),
+        "processed_shuffle_max_open_buckets": _normalize_positive_int(
+            config.processed_shuffle_max_open_buckets,
+            field_name="processed_shuffle_max_open_buckets",
+        ),
+        "processed_shuffle_stats": dict(processed_shuffle_stats),
         "pipeline_plan_path": str(pipeline_plan_path),
         "blend_plan_path": str(blend_plan_path),
         "train_source_token_limits": dict(train_source_token_limits),
@@ -1007,6 +1206,20 @@ def _prepared_manifest(
         "tokenize_chunk_records": _normalize_positive_int(
             config.tokenize_chunk_records,
             field_name="tokenize_chunk_records",
+        ),
+        "tokenize_max_pending_chunks": _resolve_tokenize_max_pending_chunks(
+            config.tokenize_max_pending_chunks,
+            workers=_resolve_stage_workers(
+                requested_workers=config.tokenize_workers,
+                default_workers=_normalize_download_workers(
+                    requested_workers=config.download_workers,
+                ),
+                field_name="tokenize_workers",
+            ),
+        ),
+        "tokenize_progress_every_chunks": _normalize_positive_int(
+            config.tokenize_progress_every_chunks,
+            field_name="tokenize_progress_every_chunks",
         ),
         "resume_downloads": config.resume_downloads,
         "download_token_budgets": dict(download_token_budgets),
