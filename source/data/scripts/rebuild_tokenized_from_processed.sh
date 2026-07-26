@@ -38,10 +38,11 @@ tokenizer="${SCALING_DATA_TOKENIZER:-EleutherAI/gpt-neox-20b}"
 target_shard_tokens="${SCALING_TARGET_SHARD_TOKENS:-100000000}"
 processed_shuffle_seed="${SCALING_PROCESSED_SHUFFLE_SEED:-20260724}"
 processed_shuffle_bucket_count="${SCALING_PROCESSED_SHUFFLE_BUCKET_COUNT:-4096}"
-processed_shuffle_max_open_buckets="${SCALING_PROCESSED_SHUFFLE_MAX_OPEN_BUCKETS:-64}"
+processed_shuffle_max_open_buckets="${SCALING_PROCESSED_SHUFFLE_MAX_OPEN_BUCKETS:-0}"
 tokenize_workers="${SCALING_TOKENIZE_WORKERS:-$default_cpu_count}"
 tokenize_chunk_records="${SCALING_TOKENIZE_CHUNK_RECORDS:-4096}"
 tokenize_max_pending_chunks="${SCALING_TOKENIZE_MAX_PENDING_CHUNKS:-$((tokenize_workers * 4))}"
+tokenize_progress_every_chunks="${SCALING_TOKENIZE_PROGRESS_EVERY_CHUNKS:-100}"
 
 if [[ ! -f "$manifest" ]]; then
   echo "Data manifest does not exist: $manifest" >&2
@@ -67,10 +68,19 @@ args=(
   --tokenize-workers "$tokenize_workers"
   --tokenize-chunk-records "$tokenize_chunk_records"
   --tokenize-max-pending-chunks "$tokenize_max_pending_chunks"
+  --tokenize-progress-every-chunks "$tokenize_progress_every_chunks"
 )
 
 if [[ "${SCALING_NO_SHUFFLE_PROCESSED_RECORDS:-0}" == "1" ]]; then
   args+=(--no-shuffle-processed-records)
+fi
+
+if [[ "${SCALING_FORCE_RESHUFFLE_PROCESSED_RECORDS:-0}" == "1" ]]; then
+  args+=(--force-reshuffle)
+fi
+
+if [[ "${SCALING_NO_PROGRESS:-0}" == "1" ]]; then
+  args+=(--no-progress)
 fi
 
 exec python -m scaling_data.rebuild_tokenized "${args[@]}" "$@"

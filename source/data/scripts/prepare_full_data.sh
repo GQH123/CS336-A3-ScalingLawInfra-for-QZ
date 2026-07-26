@@ -57,7 +57,7 @@ tokenize_max_pending_chunks="${SCALING_TOKENIZE_MAX_PENDING_CHUNKS:-$((tokenize_
 tokenize_progress_every_chunks="${SCALING_TOKENIZE_PROGRESS_EVERY_CHUNKS:-100}"
 processed_shuffle_seed="${SCALING_PROCESSED_SHUFFLE_SEED:-20260724}"
 processed_shuffle_bucket_count="${SCALING_PROCESSED_SHUFFLE_BUCKET_COUNT:-4096}"
-processed_shuffle_max_open_buckets="${SCALING_PROCESSED_SHUFFLE_MAX_OPEN_BUCKETS:-64}"
+processed_shuffle_max_open_buckets="${SCALING_PROCESSED_SHUFFLE_MAX_OPEN_BUCKETS:-0}"
 
 if [[ ! -f "$manifest" ]]; then
   echo "Data manifest does not exist: $manifest" >&2

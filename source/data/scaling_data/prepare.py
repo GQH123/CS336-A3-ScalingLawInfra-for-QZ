@@ -23,6 +23,7 @@ from scaling_data.postprocess import postprocess_directory
 from scaling_data.shuffle_processed import (
     DEFAULT_MAX_OPEN_BUCKETS,
     DEFAULT_PROCESSED_SHUFFLE_BUCKETS,
+    resolve_processed_shuffle_max_open_buckets,
     shuffle_processed_splits,
 )
 from scaling_data.tokenize import (
@@ -147,9 +148,15 @@ def prepare_data(
         config.processed_shuffle_bucket_count,
         field_name="processed_shuffle_bucket_count",
     )
-    resolved_processed_shuffle_max_open_buckets = _normalize_positive_int(
+    requested_processed_shuffle_max_open_buckets = _normalize_non_negative_int(
         config.processed_shuffle_max_open_buckets,
         field_name="processed_shuffle_max_open_buckets",
+    )
+    resolved_processed_shuffle_max_open_buckets = (
+        resolve_processed_shuffle_max_open_buckets(
+            bucket_count=resolved_processed_shuffle_bucket_count,
+            max_open_buckets=requested_processed_shuffle_max_open_buckets,
+        )
     )
     tokenization_input_dir = (
         shuffled_processed_dir if config.shuffle_processed_records else processed_dir
@@ -180,6 +187,9 @@ def prepare_data(
         "tokenization_input_dir": str(tokenization_input_dir),
         "processed_shuffle_seed": int(config.processed_shuffle_seed),
         "processed_shuffle_bucket_count": resolved_processed_shuffle_bucket_count,
+        "requested_processed_shuffle_max_open_buckets": (
+            requested_processed_shuffle_max_open_buckets
+        ),
         "processed_shuffle_max_open_buckets": resolved_processed_shuffle_max_open_buckets,
         "resume_downloads": config.resume_downloads,
     }
@@ -402,6 +412,10 @@ def main(
         "--processed-shuffle-max-open-buckets",
         type=int,
         default=DEFAULT_MAX_OPEN_BUCKETS,
+        help=(
+            "Maximum shuffle bucket files kept open. Use 0, the default, to "
+            "auto-size from the process file descriptor limit."
+        ),
     )
     parser.add_argument(
         "--no-resume-downloads",
@@ -981,6 +995,15 @@ def _normalize_positive_int(value: int, *, field_name: str) -> int:
     return parsed
 
 
+def _normalize_non_negative_int(value: int, *, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    parsed = int(value)
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return parsed
+
+
 def _resolve_tokenize_max_pending_chunks(
     value: int | None,
     *,
@@ -1170,9 +1193,21 @@ def _prepared_manifest(
             config.processed_shuffle_bucket_count,
             field_name="processed_shuffle_bucket_count",
         ),
-        "processed_shuffle_max_open_buckets": _normalize_positive_int(
+        "requested_processed_shuffle_max_open_buckets": _normalize_non_negative_int(
             config.processed_shuffle_max_open_buckets,
             field_name="processed_shuffle_max_open_buckets",
+        ),
+        "processed_shuffle_max_open_buckets": (
+            resolve_processed_shuffle_max_open_buckets(
+                bucket_count=_normalize_positive_int(
+                    config.processed_shuffle_bucket_count,
+                    field_name="processed_shuffle_bucket_count",
+                ),
+                max_open_buckets=_normalize_non_negative_int(
+                    config.processed_shuffle_max_open_buckets,
+                    field_name="processed_shuffle_max_open_buckets",
+                ),
+            )
         ),
         "processed_shuffle_stats": dict(processed_shuffle_stats),
         "pipeline_plan_path": str(pipeline_plan_path),

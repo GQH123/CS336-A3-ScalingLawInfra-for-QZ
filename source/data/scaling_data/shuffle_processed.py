@@ -7,14 +7,16 @@ from collections import Counter, OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TextIO
+from typing import Any, TextIO
 
 from scaling_data.io import iter_jsonl_records, open_text_writer, write_jsonl_record
 
 
 DEFAULT_PROCESSED_SHUFFLE_BUCKETS = 4096
-DEFAULT_MAX_OPEN_BUCKETS = 64
+DEFAULT_MAX_OPEN_BUCKETS = 0
 DEFAULT_PROCESSED_SPLITS = ("train", "validation")
+_OPEN_FILE_HEADROOM = 64
+_FALLBACK_AUTO_MAX_OPEN_BUCKETS = 512
 
 
 class ProcessedShuffleError(ValueError):
@@ -77,10 +79,15 @@ def shuffle_processed_splits(
         raise ProcessedShuffleError("output_dir must be different from input_dir")
     normalized_splits = _normalize_splits(splits)
     normalized_bucket_count = _positive_int(bucket_count, "bucket_count")
-    normalized_max_open_buckets = _positive_int(
+    requested_max_open_buckets = _non_negative_int(
         max_open_buckets,
         "max_open_buckets",
     )
+    normalized_max_open_buckets = resolve_processed_shuffle_max_open_buckets(
+        bucket_count=normalized_bucket_count,
+        max_open_buckets=requested_max_open_buckets,
+    )
+    input_files = _split_input_metadata(input_dir, normalized_splits)
     output_dir.mkdir(parents=True, exist_ok=True)
     _prepare_output_dir(
         output_dir=output_dir,
@@ -93,17 +100,18 @@ def shuffle_processed_splits(
         "algorithm": "processed_jsonl_record_bucket_shuffle_v1",
         "seed": int(seed),
         "bucket_count": normalized_bucket_count,
+        "requested_max_open_buckets": requested_max_open_buckets,
         "max_open_buckets": normalized_max_open_buckets,
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
+        "input_files": input_files,
+        "reused": False,
         "splits": {},
     }
     with TemporaryDirectory(prefix=".processed-shuffle-", dir=output_dir) as tmpdir:
         tmp_root = Path(tmpdir)
-        for split in normalized_splits:
-            input_path = _split_input_path(input_dir, split)
-            if input_path is None:
-                continue
+        for split, metadata in input_files.items():
+            input_path = Path(str(metadata["path"]))
             split_stats = _shuffle_one_split(
                 input_path=input_path,
                 output_path=output_dir / f"{split}.jsonl.gz",
@@ -120,6 +128,68 @@ def shuffle_processed_splits(
         encoding="utf-8",
     )
     return stats
+
+
+def reusable_processed_shuffle_stats(
+    *,
+    input_dir: Path,
+    output_dir: Path,
+    seed: int,
+    splits: Sequence[str] = DEFAULT_PROCESSED_SPLITS,
+    bucket_count: int = DEFAULT_PROCESSED_SHUFFLE_BUCKETS,
+) -> dict[str, Any] | None:
+    input_dir = input_dir.resolve()
+    output_dir = output_dir.resolve()
+    normalized_splits = _normalize_splits(splits)
+    normalized_bucket_count = _positive_int(bucket_count, "bucket_count")
+    current_input_files = _split_input_metadata(input_dir, normalized_splits)
+    stats_path = output_dir / "shuffle-stats.json"
+    try:
+        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(stats, dict):
+        return None
+    if stats.get("algorithm") != "processed_jsonl_record_bucket_shuffle_v1":
+        return None
+    if _optional_int(stats.get("seed")) != int(seed):
+        return None
+    if _optional_int(stats.get("bucket_count")) != normalized_bucket_count:
+        return None
+    if str(stats.get("input_dir", "")) != str(input_dir):
+        return None
+    if str(stats.get("output_dir", "")) != str(output_dir):
+        return None
+    splits_stats = stats.get("splits")
+    if not isinstance(splits_stats, dict):
+        return None
+    if set(splits_stats) != set(current_input_files):
+        return None
+    if not _stats_input_matches_current(
+        stats=stats,
+        stats_path=stats_path,
+        current_input_files=current_input_files,
+    ):
+        return None
+    for split in current_input_files:
+        if not (output_dir / f"{split}.jsonl.gz").is_file():
+            return None
+    reused = dict(stats)
+    reused["reused"] = True
+    return reused
+
+
+def resolve_processed_shuffle_max_open_buckets(
+    *,
+    bucket_count: int,
+    max_open_buckets: int,
+) -> int:
+    normalized_bucket_count = _positive_int(bucket_count, "bucket_count")
+    requested = _non_negative_int(max_open_buckets, "max_open_buckets")
+    safe_open_files = _safe_auto_max_open_files()
+    if requested == 0:
+        return max(1, min(normalized_bucket_count, safe_open_files))
+    return max(1, min(requested, normalized_bucket_count, safe_open_files))
 
 
 def _shuffle_one_split(
@@ -242,6 +312,46 @@ def _split_input_path(input_dir: Path, split: str) -> Path | None:
     return existing[0]
 
 
+def _split_input_metadata(
+    input_dir: Path,
+    splits: Sequence[str],
+) -> dict[str, dict[str, int | str]]:
+    metadata: dict[str, dict[str, int | str]] = {}
+    for split in splits:
+        input_path = _split_input_path(input_dir, split)
+        if input_path is None:
+            continue
+        stat = input_path.stat()
+        metadata[split] = {
+            "path": str(input_path.resolve()),
+            "size_bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+    return metadata
+
+
+def _stats_input_matches_current(
+    *,
+    stats: Mapping[str, Any],
+    stats_path: Path,
+    current_input_files: Mapping[str, Mapping[str, int | str]],
+) -> bool:
+    stats_input_files = stats.get("input_files")
+    if isinstance(stats_input_files, dict) and stats_input_files:
+        return stats_input_files == current_input_files
+
+    # Backward-compatible reuse for stats written before input_files existed.
+    # It is still rejected if any input file is newer than the completed stats.
+    try:
+        stats_mtime_ns = stats_path.stat().st_mtime_ns
+    except OSError:
+        return False
+    return all(
+        int(metadata["mtime_ns"]) <= stats_mtime_ns
+        for metadata in current_input_files.values()
+    )
+
+
 def _record_shuffle_key(
     *,
     seed: int,
@@ -309,6 +419,37 @@ def _positive_int(value, field_name: str) -> int:
     return parsed
 
 
+def _non_negative_int(value, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a non-negative integer") from exc
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return parsed
+
+
+def _optional_int(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_auto_max_open_files() -> int:
+    try:
+        import resource
+
+        soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft_limit == resource.RLIM_INFINITY:
+            return 1_000_000
+        return max(1, int(soft_limit) - _OPEN_FILE_HEADROOM)
+    except Exception:
+        return _FALLBACK_AUTO_MAX_OPEN_BUCKETS
+
+
 def _parse_splits(value: str) -> tuple[str, ...]:
     return _normalize_splits(item for item in value.split(",") if item.strip())
 
@@ -337,6 +478,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-open-buckets",
         type=int,
         default=DEFAULT_MAX_OPEN_BUCKETS,
+        help=(
+            "Maximum shuffle bucket files kept open. Use 0, the default, to "
+            "auto-size from the process file descriptor limit."
+        ),
     )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)

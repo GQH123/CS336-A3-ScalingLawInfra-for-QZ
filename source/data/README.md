@@ -151,9 +151,11 @@ export SCALING_DATA_TOKENIZER=EleutherAI/gpt-neox-20b
 export SCALING_TARGET_SHARD_TOKENS=100000000
 export SCALING_PROCESSED_SHUFFLE_SEED=20260724
 export SCALING_PROCESSED_SHUFFLE_BUCKET_COUNT=4096
+export SCALING_PROCESSED_SHUFFLE_MAX_OPEN_BUCKETS=0
 export SCALING_TOKENIZE_WORKERS=32
 export SCALING_TOKENIZE_CHUNK_RECORDS=4096
 export SCALING_TOKENIZE_MAX_PENDING_CHUNKS=128
+export SCALING_TOKENIZE_PROGRESS_EVERY_CHUNKS=100
 
 "$data_package_root/scripts/rebuild_tokenized_from_processed.sh"
 ```
@@ -162,6 +164,20 @@ Use a different `SCALING_PROCESSED_SHUFFLE_SEED` only when intentionally
 creating a new dataset order. Keep the same seed for repeatable exploratory and
 final builds. The shuffle is split-local, so train documents are shuffled only
 with train documents and validation documents only with validation documents.
+The first processed-record shuffle is an I/O-heavy JSONL/gzip rewrite, so CPU
+usage can be low until tokenization starts. The rebuild launcher now reuses a
+completed matching `data_work/processed_jsonl_shuffled/shuffle-stats.json` on
+later reruns instead of rewriting the shuffled JSONL again. Set
+`SCALING_FORCE_RESHUFFLE_PROCESSED_RECORDS=1` only when you intentionally want a
+fresh rewrite. Set `SCALING_NO_SHUFFLE_PROCESSED_RECORDS=1` only when you want
+to tokenize the original processed order.
+
+`SCALING_PROCESSED_SHUFFLE_MAX_OPEN_BUCKETS=0` means auto-size the number of
+simultaneously open temporary bucket files from the process file-descriptor
+limit. This avoids the slow path where a 4096-bucket shuffle keeps only a small
+LRU cache of bucket files open and repeatedly opens/closes files on shared
+storage. Set a positive value only when the filesystem or host policy requires a
+lower cap.
 
 During tokenization, per-source train token limits are upper bounds. If the next
 whole document would exceed a source's remaining budget, it is skipped rather
@@ -291,6 +307,7 @@ co-located work needs a lower ceiling:
 export SCALING_TOKENIZE_WORKERS=32
 export SCALING_TOKENIZE_CHUNK_RECORDS=4096
 export SCALING_TOKENIZE_MAX_PENDING_CHUNKS=128
+export SCALING_TOKENIZE_PROGRESS_EVERY_CHUNKS=100
 ```
 
 Tokenization workers encode record batches when the tokenizer exposes a batch

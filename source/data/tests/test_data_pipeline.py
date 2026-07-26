@@ -30,7 +30,10 @@ from scaling_data.rebuild_tokenized import (
     RebuildTokenizedConfig,
     rebuild_tokenized_from_processed,
 )
-from scaling_data.shuffle_processed import shuffle_processed_splits
+from scaling_data.shuffle_processed import (
+    resolve_processed_shuffle_max_open_buckets,
+    shuffle_processed_splits,
+)
 from scaling_data.text_processing import clean_text, document_hash, should_keep_text
 from scaling_data.shuffle_tokenized import shuffle_tokenized_corpus
 from scaling_data.tokenize import (
@@ -319,9 +322,40 @@ class ProcessedShuffleTests(unittest.TestCase):
                 stats["splits"]["validation"]["source_document_counts"],
                 {"general_web": 7},
             )
+            self.assertEqual(stats["requested_max_open_buckets"], 1)
+            self.assertEqual(stats["max_open_buckets"], 1)
+            self.assertIn("train", stats["input_files"])
+            self.assertFalse(stats["reused"])
             self.assertNotEqual(
                 [record["document_hash"] for record in shuffled_train],
                 [record["document_hash"] for record in train_records],
+            )
+
+    def test_shuffle_processed_auto_max_open_buckets_uses_fd_limit(self):
+        with patch(
+            "scaling_data.shuffle_processed._safe_auto_max_open_files",
+            return_value=200,
+        ):
+            self.assertEqual(
+                resolve_processed_shuffle_max_open_buckets(
+                    bucket_count=4096,
+                    max_open_buckets=0,
+                ),
+                200,
+            )
+            self.assertEqual(
+                resolve_processed_shuffle_max_open_buckets(
+                    bucket_count=32,
+                    max_open_buckets=0,
+                ),
+                32,
+            )
+            self.assertEqual(
+                resolve_processed_shuffle_max_open_buckets(
+                    bucket_count=4096,
+                    max_open_buckets=1000,
+                ),
+                200,
             )
 
 
@@ -1493,6 +1527,32 @@ class PrepareDataTests(unittest.TestCase):
                     )
                 ],
                 [f"train-{index}" for index in range(10)],
+            )
+            self.assertFalse(summary["processed_shuffle_stats"]["reused"])
+            self.assertEqual(summary["requested_shuffle_max_open_buckets"], 1)
+            self.assertEqual(summary["shuffle_max_open_buckets"], 1)
+
+            stats_path = root / "work" / "processed_jsonl_shuffled" / "shuffle-stats.json"
+            stats_before = stats_path.read_text(encoding="utf-8")
+            second_summary = rebuild_tokenized_from_processed(
+                RebuildTokenizedConfig(
+                    manifest_path=manifest_path,
+                    processed_dir=processed_dir,
+                    work_dir=root / "work",
+                    tokenizer_name="fake-tokenizer",
+                    target_shard_tokens=16,
+                    shuffle_seed=17,
+                    shuffle_bucket_count=3,
+                    shuffle_max_open_buckets=1,
+                    index_validation_mode="metadata",
+                ),
+                tokenizer_loader=lambda name: FakeTokenizer(),
+            )
+
+            self.assertTrue(second_summary["processed_shuffle_stats"]["reused"])
+            self.assertEqual(
+                stats_path.read_text(encoding="utf-8"),
+                stats_before,
             )
 
     def test_prepare_data_uses_blend_token_targets_when_tokenizing(self):
@@ -2721,6 +2781,10 @@ class ScriptPackagingTests(unittest.TestCase):
         self.assertIn("SCALING_PROCESSED_SHUFFLE_SEED", script)
         self.assertIn("SCALING_TOKENIZE_WORKERS", script)
         self.assertIn("SCALING_TOKENIZE_MAX_PENDING_CHUNKS", script)
+        self.assertIn("SCALING_TOKENIZE_PROGRESS_EVERY_CHUNKS", script)
+        self.assertIn("SCALING_FORCE_RESHUFFLE_PROCESSED_RECORDS", script)
+        self.assertIn("SCALING_NO_PROGRESS", script)
+        self.assertIn("SCALING_PROCESSED_SHUFFLE_MAX_OPEN_BUCKETS:-0", script)
         self.assertNotIn("HF_TOKEN", script)
 
     def test_pyproject_exposes_processed_shuffle_and_rebuild_entrypoints(self):
