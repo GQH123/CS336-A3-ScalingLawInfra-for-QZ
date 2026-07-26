@@ -53,6 +53,8 @@ _QZ_FIELDS = {
     "username": "QZ_USERNAME",
     "password_encrypted": "QZ_PASSWORD_ENCRYPTED",
     "cookie": "QZ_COOKIE",
+    "cookie_file_path": "QZ_COOKIE_FILE",
+    "session_heartbeat_interval_seconds": "QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS",
     "workspace_id": "QZ_WORKSPACE_ID",
     "project_id": "QZ_PROJECT_ID",
     "compute_group_id": "QZ_COMPUTE_GROUP_ID",

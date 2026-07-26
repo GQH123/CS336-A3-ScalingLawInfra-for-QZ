@@ -75,13 +75,19 @@ class FakeSession:
         return response
 
 
-def _client(session=None, cookie="session=old", password="a" * 256) -> QzClient:
+def _client(
+    session=None,
+    cookie="session=old",
+    password="a" * 256,
+    cookie_file_path="",
+) -> QzClient:
     return QzClient(
         QzClientConfig(
             base_url="https://qz.sii.edu.cn",
             username="253108120093",
             password=password,
             cookie=cookie,
+            cookie_file_path=cookie_file_path,
         ),
         session_factory=lambda: session or FakeSession(),
     )
@@ -194,6 +200,73 @@ def test_api_refreshes_cookie_from_set_cookie_header_before_next_request():
     assert session.posts[1]["headers"]["cookie"] == (
         "inspire-session=fresh; stable=keep; throttle-token=ok"
     )
+
+
+def test_client_loads_cookie_from_file_when_config_cookie_is_absent(tmp_path):
+    cookie_file = tmp_path / "qz.cookie"
+    cookie_file.write_text("inspire-session=file-fresh\n", encoding="utf-8")
+
+    client = _client(cookie="", cookie_file_path=str(cookie_file))
+
+    assert client.cookie == "inspire-session=file-fresh"
+
+
+def test_config_cookie_takes_precedence_over_cookie_file(tmp_path):
+    cookie_file = tmp_path / "qz.cookie"
+    cookie_file.write_text("inspire-session=file-stale\n", encoding="utf-8")
+
+    client = _client(
+        cookie="inspire-session=env-fresh",
+        cookie_file_path=str(cookie_file),
+    )
+
+    assert client.cookie == "inspire-session=env-fresh"
+
+
+def test_api_refresh_persists_cookie_file_after_set_cookie(tmp_path):
+    cookie_file = tmp_path / "qz.cookie"
+    session = FakeSession()
+    session.post_responses = [
+        FakeResponse(
+            payload={"code": 0, "data": {"job_id": "job-1"}},
+            headers={"Set-Cookie": "inspire-session=fresh; Path=/; HttpOnly"},
+        )
+    ]
+    client = _client(
+        session=session,
+        cookie="inspire-session=old; stable=keep",
+        cookie_file_path=str(cookie_file),
+    )
+
+    assert client.create_train_job({"workspace_id": "ws-1"}) == {"job_id": "job-1"}
+
+    assert cookie_file.read_text(encoding="utf-8") == (
+        "inspire-session=fresh; stable=keep\n"
+    )
+    assert oct(cookie_file.stat().st_mode & 0o777) == "0o600"
+
+
+def test_login_with_cas_persists_cookie_file(tmp_path):
+    cookie_file = tmp_path / "qz.cookie"
+    session = FakeSession()
+    session.cookies = [FakeCookie("inspire-session", "fresh")]
+    session.get_responses = [
+        FakeResponse(
+            url="https://keycloak.sii.edu.cn/realms/qz",
+            text='"loginUrl": "/realms/qz/broker/cas/login"',
+        ),
+        FakeResponse(url="https://cas.sii.edu.cn/login", text=""),
+    ]
+    session.post_responses = [FakeResponse(url="https://qz.sii.edu.cn")]
+
+    cookie = _client(
+        session=session,
+        cookie="",
+        cookie_file_path=str(cookie_file),
+    ).login_with_cas()
+
+    assert cookie == "inspire-session=fresh"
+    assert cookie_file.read_text(encoding="utf-8") == "inspire-session=fresh\n"
 
 
 def test_probe_cookie_auth_uses_read_only_train_job_list_endpoint():

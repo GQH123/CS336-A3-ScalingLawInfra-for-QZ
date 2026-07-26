@@ -4,6 +4,7 @@ import re
 import time
 from dataclasses import dataclass
 from http.cookies import CookieError, SimpleCookie
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -45,10 +46,12 @@ class QzClientConfig:
     username: str = ""
     password: str = ""
     cookie: str = ""
+    cookie_file_path: str = ""
     request_timeout_seconds: int = 60
     login_timeout_seconds: int = 30
     login_max_tries: int = 3
     proxy: str = ""
+    session_heartbeat_interval_seconds: int = 0
 
 
 class QzClient:
@@ -62,7 +65,8 @@ class QzClient:
         self.base_url = config.base_url.rstrip("/")
         self._session_factory = session_factory or requests.Session
         self._sleep = sleep
-        self._cookie = config.cookie
+        self._cookie_file_path = str(config.cookie_file_path).strip()
+        self._cookie = str(config.cookie).strip() or self._load_cookie_from_file()
 
     @property
     def cookie(self) -> str:
@@ -73,6 +77,7 @@ class QzClient:
         for attempt in range(self.config.login_max_tries):
             try:
                 self._cookie = self._login_with_cas_once()
+                self._persist_cookie_to_file()
                 return self._cookie
             except QzTransientError as exc:
                 last_error = exc
@@ -442,6 +447,26 @@ class QzClient:
             else:
                 cookies[name] = value
         self._cookie = "; ".join(f"{name}={value}" for name, value in cookies.items())
+        self._persist_cookie_to_file()
+
+    def _load_cookie_from_file(self) -> str:
+        if not self._cookie_file_path:
+            return ""
+        try:
+            return Path(self._cookie_file_path).read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def _persist_cookie_to_file(self) -> None:
+        if not self._cookie_file_path:
+            return
+        path = Path(self._cookie_file_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f".{path.name}.tmp")
+        tmp_path.write_text(f"{self._cookie.strip()}\n", encoding="utf-8")
+        tmp_path.chmod(0o600)
+        tmp_path.replace(path)
+        path.chmod(0o600)
 
     @classmethod
     def _cookie_updates_from_response(

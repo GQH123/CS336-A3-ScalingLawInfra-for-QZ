@@ -13,6 +13,8 @@ def _valid_env():
         "QZ_USERNAME": "253108120093",
         "QZ_PASSWORD_ENCRYPTED": "a" * 256,
         "QZ_COOKIE": "session=abc",
+        "QZ_COOKIE_FILE": "/secure/course/qz.cookie",
+        "QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS": "900",
         "QZ_WORKSPACE_ID": "ws-1",
         "QZ_PROJECT_ID": "project-1",
         "QZ_COMPUTE_GROUP_ID": "lcg-1",
@@ -65,6 +67,8 @@ def test_build_adapter_from_env_parses_staff_resource_preset():
     assert adapter.worker_conda_init == "/opt/anaconda3/etc/profile.d/conda.sh"
     assert adapter.worker_event_log_dir == "/shared/course/worker-events"
     assert adapter.callback_token_value == "internal-callback-token"
+    assert adapter.client.config.cookie_file_path == "/secure/course/qz.cookie"
+    assert adapter.client.config.session_heartbeat_interval_seconds == 900
 
 
 def test_build_adapter_from_env_reports_missing_required_keys_together():
@@ -88,6 +92,22 @@ def test_build_adapter_from_env_accepts_cookie_without_cas_credentials():
     assert adapter.client.cookie == "inspire-session=manual"
     assert adapter.client.config.username == ""
     assert adapter.client.config.password == ""
+
+
+def test_build_adapter_from_env_uses_cookie_file_without_static_cookie(tmp_path):
+    cookie_file = tmp_path / "qz.cookie"
+    cookie_file.write_text("inspire-session=file-fresh\n", encoding="utf-8")
+    env = _valid_env()
+    del env["QZ_COOKIE"]
+    del env["QZ_USERNAME"]
+    del env["QZ_PASSWORD_ENCRYPTED"]
+    env["QZ_COOKIE_FILE"] = str(cookie_file)
+
+    adapter = build_qz_distributed_adapter_from_env(env, now=lambda: "now")
+
+    assert adapter.client.cookie == "inspire-session=file-fresh"
+    assert adapter.client.config.cookie == ""
+    assert adapter.client.config.cookie_file_path == str(cookie_file)
 
 
 @pytest.mark.parametrize(

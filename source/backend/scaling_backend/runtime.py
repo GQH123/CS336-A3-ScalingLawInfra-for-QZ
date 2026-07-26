@@ -31,6 +31,7 @@ class RuntimeConfigError(ValueError):
 
 
 _LOG = logging.getLogger(__name__)
+_UVICORN_ERROR_LOG = logging.getLogger("uvicorn.error")
 
 
 def load_api_keys_csv(path: str | Path) -> dict[str, str]:
@@ -206,6 +207,20 @@ def build_app_from_env(
             interval_seconds=provider_poll_interval_seconds,
             snapshot_path=snapshot_path,
         )
+    qz_session_heartbeat_interval_seconds = _get_nonnegative_int(
+        values,
+        "QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS",
+        0,
+    )
+    if (
+        qz_session_heartbeat_interval_seconds > 0
+        and getattr(service.provider, "provider_name", "") == "qz_distributed"
+    ):
+        _install_qz_session_heartbeat_loop(
+            app,
+            service.provider,
+            interval_seconds=qz_session_heartbeat_interval_seconds,
+        )
     return app
 
 
@@ -294,6 +309,25 @@ def run_provider_poll_iteration(
     return report
 
 
+def run_qz_session_heartbeat_iteration(provider: ProviderAdapter) -> dict[str, Any]:
+    if getattr(provider, "provider_name", "") != "qz_distributed":
+        raise RuntimeConfigError("QZ session heartbeat requires qz_distributed provider")
+    client = getattr(provider, "client", None)
+    config = getattr(provider, "config", None)
+    probe = getattr(client, "probe_cookie_auth", None)
+    workspace_id = str(getattr(config, "workspace_id", "")).strip()
+    if not callable(probe) or not workspace_id:
+        raise RuntimeConfigError("QZ session heartbeat provider is missing probe support")
+    probe(workspace_id=workspace_id)
+    _log_qz_session_heartbeat_info("QZ session heartbeat succeeded")
+    return {"ok": True, "provider": "qz_distributed"}
+
+
+def _log_qz_session_heartbeat_info(message: str, *args: Any) -> None:
+    _LOG.info(message, *args)
+    _UVICORN_ERROR_LOG.info(message, *args)
+
+
 def _install_provider_poll_loop(
     app: FastAPI,
     service: ExperimentService,
@@ -339,8 +373,86 @@ def _install_provider_poll_loop(
             thread.join(timeout=5)
         app.state.provider_poll_thread = None
 
-    app.add_event_handler("startup", start_provider_poll_loop)
-    app.add_event_handler("shutdown", stop_provider_poll_loop)
+    _add_lifecycle_event_handler(app, "startup", start_provider_poll_loop)
+    _add_lifecycle_event_handler(app, "shutdown", stop_provider_poll_loop)
+
+
+def _install_qz_session_heartbeat_loop(
+    app: FastAPI,
+    provider: ProviderAdapter,
+    *,
+    interval_seconds: int,
+    thread_factory: Callable[..., threading.Thread] = threading.Thread,
+    stop_event_factory: Callable[[], threading.Event] = threading.Event,
+) -> None:
+    interval = int(interval_seconds)
+    if interval <= 0:
+        return
+
+    app.state.qz_session_heartbeat_interval_seconds = interval
+    stop_event = stop_event_factory()
+
+    def heartbeat_loop() -> None:
+        while True:
+            try:
+                run_qz_session_heartbeat_iteration(provider)
+            except Exception:
+                _LOG.exception("Background QZ session heartbeat failed")
+                _UVICORN_ERROR_LOG.exception("Background QZ session heartbeat failed")
+            if stop_event.wait(interval):
+                break
+
+    def start_qz_session_heartbeat_loop() -> None:
+        if getattr(app.state, "qz_session_heartbeat_thread", None) is not None:
+            return
+        _log_qz_session_heartbeat_info(
+            "Starting QZ session heartbeat loop interval_seconds=%s",
+            interval,
+        )
+        thread = thread_factory(
+            target=heartbeat_loop,
+            daemon=True,
+            name="scaling-qz-session-heartbeat",
+        )
+        app.state.qz_session_heartbeat_stop_event = stop_event
+        app.state.qz_session_heartbeat_thread = thread
+        thread.start()
+
+    def stop_qz_session_heartbeat_loop() -> None:
+        stop_event.set()
+        thread = getattr(app.state, "qz_session_heartbeat_thread", None)
+        if thread is not None:
+            thread.join(timeout=5)
+        app.state.qz_session_heartbeat_thread = None
+
+    _add_lifecycle_event_handler(app, "startup", start_qz_session_heartbeat_loop)
+    _add_lifecycle_event_handler(app, "shutdown", stop_qz_session_heartbeat_loop)
+
+
+def _add_lifecycle_event_handler(
+    app: FastAPI,
+    event_type: str,
+    handler: Callable[[], None],
+) -> None:
+    add_event_handler = getattr(app, "add_event_handler", None)
+    if callable(add_event_handler):
+        add_event_handler(event_type, handler)
+        return
+
+    router = getattr(app, "router", None)
+    router_add_event_handler = getattr(router, "add_event_handler", None)
+    if callable(router_add_event_handler):
+        router_add_event_handler(event_type, handler)
+        return
+
+    handlers = getattr(router, f"on_{event_type}", None)
+    if hasattr(handlers, "append"):
+        handlers.append(handler)
+        return
+
+    raise RuntimeConfigError(
+        f"FastAPI app does not support {event_type} lifecycle handlers"
+    )
 
 
 def _manifest_uri_builder(base_uri: str) -> Callable[[str], str]:

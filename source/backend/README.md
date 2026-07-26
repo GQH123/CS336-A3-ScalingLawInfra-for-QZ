@@ -52,8 +52,11 @@ Required staff configuration:
 
 ```bash
 export QZ_API_BASE_URL="https://qz.sii.edu.cn"
+export QZ_COOKIE_FILE="/secure/course/qz.cookie"
+# Optional startup override or initial seed. When set, QZ_COOKIE wins over QZ_COOKIE_FILE.
 export QZ_COOKIE="<document.cookie from a manually logged-in QZ browser session>"
-# Optional fallback only. CAPTCHA-protected deployments should rely on QZ_COOKIE.
+export QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS="900"
+# Optional fallback only. CAPTCHA-protected deployments should rely on QZ_COOKIE_FILE.
 export QZ_USERNAME="253108120093"
 export QZ_PASSWORD_ENCRYPTED="<encrypted CAS payload>"
 export QZ_WORKSPACE_ID="ws-9dcc0e1f-80a4-4af2-bc2f-0e352e7b17e6"
@@ -80,11 +83,23 @@ expose QZ workspace IDs, compute group IDs, spec IDs, cookies, or raw provider
 errors. QZ numeric settings for GPU count, CPU count, memory, priority,
 shared-memory size, request timeout, login timeout, and login retry count must
 be positive integers; malformed values are rejected during backend startup.
-If `QZ_COOKIE` is set, the adapter uses it directly and refreshes its in-memory
-cookie string from every QZ response `Set-Cookie` header before the next request.
-Staff should still refresh the configured secret when the browser session expires
-or the service restarts. If `QZ_COOKIE` is absent, the adapter falls back to the
-legacy CAS credential flow.
+At startup the QZ adapter uses `QZ_COOKIE` first. If that variable is absent, it
+loads the stripped cookie string from `QZ_COOKIE_FILE`; if neither source has a
+cookie, it falls back to the legacy CAS credential flow. Every QZ response
+`Set-Cookie` header and every successful CAS login refreshes the in-memory
+cookie and writes it back to `QZ_COOKIE_FILE` with `0600` permissions when the
+file path is configured. For persistent services, prefer leaving `QZ_COOKIE`
+unset after the file is seeded so a stale environment value cannot mask the
+refreshed file on restart.
+When `QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS` is greater than `0`, the API starts
+a QZ-only background heartbeat that periodically calls the same read-only
+distributed-training job-list endpoint used by preflight with `page_size=1`.
+The heartbeat runs once when the API starts, then once per configured interval.
+It does not submit, cancel, or mutate training jobs. Successful and failed
+heartbeat attempts are logged through the uvicorn console logger, so a normal
+`./launch.sh` session should show heartbeat activity. Any `Set-Cookie` header on
+the heartbeat response follows the same `QZ_COOKIE_FILE` persistence path. Use
+`0` to disable this API-side session heartbeat.
 The QZ adapter keeps HTTP callback mode by default. It exports
 `SCALING_INTERNAL_CALLBACK_TOKEN` into the worker command under
 `QZ_CALLBACK_TOKEN_ENV` because the QZ create payload has no separate
@@ -285,8 +300,9 @@ PYTHONPATH=source/backend python -m scaling_backend.preflight \
 ```
 
 This probe remains non-submitting. When `QZ_COOKIE` is configured, the QZ path
-calls the read-only distributed-training job-list endpoint with `page_size=1`;
-otherwise it performs the legacy CAS login check. The Slurm path runs
+uses it for the read-only distributed-training job-list endpoint with
+`page_size=1`; otherwise it tries `QZ_COOKIE_FILE`, then performs the legacy CAS
+login check only if neither cookie source is available. The Slurm path runs
 `sinfo --version` and `sbatch --version` only.
 
 For a local staff rehearsal with no provider network calls:

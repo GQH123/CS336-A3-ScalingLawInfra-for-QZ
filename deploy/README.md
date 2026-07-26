@@ -163,11 +163,23 @@ random API token; set it separately after logging in to QZ manually and solving
 any CAPTCHA challenge:
 
 ```bash
+export QZ_COOKIE_FILE="/secure/course/qz.cookie"
+export QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS="900"
+# Optional startup override or initial seed. When set, QZ_COOKIE wins over QZ_COOKIE_FILE.
 export QZ_COOKIE="<document.cookie from a logged-in qz.sii.edu.cn session>"
-# Optional fallback only when QZ_COOKIE is absent.
+# Optional CAS fallback only when neither QZ_COOKIE nor QZ_COOKIE_FILE provides a cookie.
 export QZ_USERNAME="$QZ_USERNAME"
 export QZ_PASSWORD_ENCRYPTED="$QZ_PASSWORD_ENCRYPTED"
 ```
+
+At startup the QZ adapter uses `QZ_COOKIE` first. If that variable is absent, it
+loads the stripped cookie string from `QZ_COOKIE_FILE`; if neither source has a
+cookie, it falls back to the CAS credential flow. Every QZ response
+`Set-Cookie` header and every successful CAS login refreshes the in-memory
+cookie and writes it back to `QZ_COOKIE_FILE` with `0600` permissions when the
+file path is configured. For a persistent API service, leave `QZ_COOKIE` unset
+after the cookie file is seeded so a stale environment value cannot hide the
+refreshed file on restart.
 
 Run preflight on the control node:
 
@@ -185,6 +197,17 @@ poll loop. A value such as `30` makes the API poll active QZ jobs, refresh
 state snapshots, and close jobs that fail after the worker process dies before
 it can call back. Use `0` only when an external scheduler calls
 `admin_cli poll-active`.
+
+Set `qz.session_heartbeat_interval_seconds` in the API config, or export
+`QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS`, to keep the QZ browser session active
+from the API process. A value such as `900` makes the control node call the same
+read-only QZ job-list probe used by preflight with `page_size=1` once when the
+API starts, then once per interval. It does not create, cancel, or mutate
+training jobs. Successful and failed heartbeat attempts are logged through the
+uvicorn console logger, so `./launch.sh` output should include heartbeat
+activity after startup. Any `Set-Cookie` header on the heartbeat response
+follows the same `QZ_COOKIE_FILE` persistence path. Use `0` to disable the
+API-side QZ session heartbeat.
 
 For QZ cookie or credential connectivity without submitting a training task:
 

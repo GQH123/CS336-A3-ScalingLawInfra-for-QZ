@@ -29,7 +29,8 @@
   },
   "qz": {
     "api_base_url": "https://qz.sii.edu.cn",
-    "cookie": "<document.cookie-from-logged-in-qz-browser-session>",
+    "cookie": "<optional-document.cookie-startup-override>",
+    "cookie_file_path": "/secure/course/qz.cookie",
     "username": "253108120093",
     "password_encrypted": "<optional-encrypted-cas-password-fallback>",
     "workspace_id": "<qz-workspace-id>",
@@ -46,6 +47,7 @@
     "shm_gi": 1200,
     "worker_trainer": "course_trainer.worker:train",
     "worker_heartbeat_interval_seconds": 60,
+    "session_heartbeat_interval_seconds": 900,
     "worker_conda_env": "fnlps_a3_compute",
     "worker_conda_init": "/opt/anaconda3/etc/profile.d/conda.sh",
     "worker_tokenized_index_validation_mode": "metadata",

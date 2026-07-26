@@ -482,11 +482,19 @@ PYTHONPATH=source/backend python -m scaling_backend.preflight \
 ```
 
 The QZ provider probe is non-submitting. If `QZ_COOKIE` is configured, it
-validates the browser session by calling the read-only distributed-training
-job-list endpoint with `page_size=1`. If no cookie is configured, it falls back
-to the legacy CAS login check with `QZ_API_BASE_URL`, `QZ_USERNAME`, and
-`QZ_PASSWORD_ENCRYPTED`. The probe must not call the distributed-training
-submission endpoint or allocate an instance.
+validates that cookie by calling the read-only distributed-training job-list
+endpoint with `page_size=1`. If `QZ_COOKIE` is absent, it reads
+`QZ_COOKIE_FILE` and validates that cookie the same way. If neither cookie
+source is available, it falls back to the legacy CAS login check with
+`QZ_API_BASE_URL`, `QZ_USERNAME`, and `QZ_PASSWORD_ENCRYPTED`. The probe must not
+call the distributed-training submission endpoint or allocate an instance.
+
+When `QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS` is greater than `0`, the API uses
+the same read-only QZ provider probe as a session heartbeat. It runs once when
+the API starts, then once per configured interval. It keeps the browser session
+active without creating or mutating jobs, logs heartbeat success/failure through
+the uvicorn console logger, and refreshes the configured `QZ_COOKIE_FILE` from
+any `Set-Cookie` header returned by QZ. `0` disables the heartbeat.
 
 ## 12. Fake Provider for Tests
 

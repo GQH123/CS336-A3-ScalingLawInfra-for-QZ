@@ -173,6 +173,30 @@ export SCALING_WORKER_EVENT_IMPORT_DIR="/secure/course/worker-events"
 export QZ_WORKER_EVENT_LOG_DIR="/secure/course/worker-events"
 ```
 
+For `qz_distributed`, prefer a staff-private cookie file so a refreshed browser
+session survives API restarts:
+
+```bash
+export QZ_COOKIE_FILE="/secure/course/qz.cookie"
+export QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS="900"
+# Optional startup override or initial seed. When set, QZ_COOKIE wins over QZ_COOKIE_FILE.
+export QZ_COOKIE="<document.cookie from a logged-in qz.sii.edu.cn session>"
+# Optional CAS fallback only when neither QZ_COOKIE nor QZ_COOKIE_FILE provides a cookie.
+export QZ_USERNAME="253108120093"
+export QZ_PASSWORD_ENCRYPTED="<encrypted CAS payload>"
+```
+
+The QZ startup order is `QZ_COOKIE`, then `QZ_COOKIE_FILE`, then the CAS
+fallback. Each QZ `Set-Cookie` response and each successful CAS login refreshes
+the in-memory cookie and writes it back to `QZ_COOKIE_FILE` with `0600`
+permissions when the path is configured. A positive heartbeat interval makes the
+API call the same read-only QZ job-list probe used by preflight with
+`page_size=1` once when the API starts, then once per interval; it does not
+create or mutate training jobs. Successful and failed heartbeat attempts are
+logged through the uvicorn console logger, so staff should see heartbeat
+activity in the `./launch.sh` output. Set the heartbeat interval to `0` to
+disable the API-side QZ session heartbeat.
+
 For HTTP-published manifests, set both:
 
 ```bash
@@ -212,12 +236,12 @@ PYTHONPATH=source/backend python -m scaling_backend.preflight \
 ```
 
 The provider probe is intentionally non-submitting. For `qz_distributed`, it
-validates `QZ_COOKIE` first by calling the read-only distributed-training
-job-list endpoint with `page_size=1`; if no cookie is configured, it falls back
-to CAS login with `QZ_USERNAME`, `QZ_PASSWORD_ENCRYPTED`, and `QZ_API_BASE_URL`.
-It does not create a distributed-training task. For `slurm`, it runs only
-`sinfo --version` and `sbatch --version`; it does not call `sbatch` with a job
-script.
+validates `QZ_COOKIE` first, otherwise `QZ_COOKIE_FILE`, by calling the
+read-only distributed-training job-list endpoint with `page_size=1`; if neither
+source provides a cookie, it falls back to CAS login with `QZ_USERNAME`,
+`QZ_PASSWORD_ENCRYPTED`, and `QZ_API_BASE_URL`. It does not create a
+distributed-training task. For `slurm`, it runs only `sinfo --version` and
+`sbatch --version`; it does not call `sbatch` with a job script.
 
 Start the backend:
 

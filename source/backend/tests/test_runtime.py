@@ -1,15 +1,20 @@
 import json
+import logging
 from pathlib import Path
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from scaling_backend.course_config import load_api_config_env
 from scaling_backend.runtime import (
+    _install_provider_poll_loop,
+    _install_qz_session_heartbeat_loop,
     RuntimeConfigError,
     build_app_from_env,
     build_service_from_env,
     load_api_keys_csv,
     run_provider_poll_iteration,
+    run_qz_session_heartbeat_iteration,
 )
 
 
@@ -122,6 +127,237 @@ def test_api_config_can_enable_background_provider_polling(tmp_path):
     assert values["SCALING_PROVIDER_POLL_INTERVAL_SECONDS"] == "30"
     with TestClient(app):
         assert app.state.provider_poll_interval_seconds == 30
+
+
+def test_api_config_can_enable_qz_session_heartbeat(tmp_path):
+    roster = tmp_path / "student_keys.csv"
+    roster.write_text("student_id,api_key\nstudent-1,key-1\n", encoding="utf-8")
+    config_path = tmp_path / "api-runtime.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "api": {
+                    "provider": "qz_distributed",
+                    "student_keys_csv": str(roster),
+                    "internal_callback_token": "internal-token",
+                    "admin_api_token": "admin-token",
+                    "callback_url": "https://backend/internal/provider-events",
+                    "manifest_base_uri": "memory://manifests",
+                },
+                "qz": {
+                    "session_heartbeat_interval_seconds": 60,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = _FakeQzProvider(workspace_id="ws-1")
+
+    values = load_api_config_env(config_path)
+    app = build_app_from_env(
+        {"SCALING_API_CONFIG": str(config_path)},
+        now=lambda: "2026-07-16T15:00:00Z",
+        provider=provider,
+    )
+
+    assert values["QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS"] == "60"
+    with TestClient(app):
+        assert app.state.qz_session_heartbeat_interval_seconds == 60
+
+
+def test_qz_session_heartbeat_zero_interval_is_disabled(tmp_path):
+    roster = tmp_path / "student_keys.csv"
+    roster.write_text("student_id,api_key\nstudent-1,key-1\n", encoding="utf-8")
+    app = build_app_from_env(
+        {
+            "SCALING_PROVIDER": "qz_distributed",
+            "SCALING_STUDENT_KEYS_CSV": str(roster),
+            "SCALING_INTERNAL_CALLBACK_TOKEN": "internal-token",
+            "SCALING_ADMIN_API_TOKEN": "admin-token",
+            "SCALING_CALLBACK_URL": "https://backend/internal/provider-events",
+            "SCALING_MANIFEST_BASE_URI": "memory://manifests",
+            "QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS": "0",
+        },
+        now=lambda: "2026-07-16T15:00:00Z",
+        provider=_FakeQzProvider(workspace_id="ws-1"),
+    )
+
+    with TestClient(app):
+        assert not hasattr(app.state, "qz_session_heartbeat_interval_seconds")
+
+
+def test_qz_session_heartbeat_iteration_uses_read_only_probe():
+    provider = _FakeQzProvider(workspace_id="ws-1")
+
+    result = run_qz_session_heartbeat_iteration(provider)
+
+    assert result == {"ok": True, "provider": "qz_distributed"}
+    assert provider.client.probes == ["ws-1"]
+
+
+def test_qz_session_heartbeat_iteration_logs_success(caplog):
+    provider = _FakeQzProvider(workspace_id="ws-1")
+
+    with caplog.at_level(logging.INFO, logger="scaling_backend.runtime"):
+        run_qz_session_heartbeat_iteration(provider)
+
+    assert "QZ session heartbeat succeeded" in caplog.text
+
+
+def test_qz_session_heartbeat_iteration_logs_to_uvicorn_error(caplog):
+    provider = _FakeQzProvider(workspace_id="ws-1")
+
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        run_qz_session_heartbeat_iteration(provider)
+
+    assert any(
+        record.name == "uvicorn.error"
+        and "QZ session heartbeat succeeded" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_qz_session_heartbeat_loop_probes_once_before_waiting():
+    events = []
+    app = FastAPI()
+    provider = _OrderedFakeQzProvider(workspace_id="ws-1", events=events)
+
+    _install_qz_session_heartbeat_loop(
+        app,
+        provider,
+        interval_seconds=900,
+        thread_factory=_InlineThread,
+        stop_event_factory=lambda: _StopAfterFirstWait(events),
+    )
+
+    for handler in app.router.on_startup:
+        handler()
+    for handler in app.router.on_shutdown:
+        handler()
+
+    assert events[:2] == [("probe", "ws-1"), ("wait", 900)]
+
+
+def test_qz_session_heartbeat_loop_supports_apps_without_add_event_handler():
+    app = _LifecycleOnlyApp()
+
+    _install_qz_session_heartbeat_loop(
+        app,
+        _OrderedFakeQzProvider(workspace_id="ws-1", events=[]),
+        interval_seconds=900,
+    )
+
+    assert len(app.router.on_startup) == 1
+    assert len(app.router.on_shutdown) == 1
+
+
+def test_provider_poll_loop_supports_apps_without_add_event_handler(tmp_path):
+    app = _LifecycleOnlyApp()
+
+    _install_provider_poll_loop(
+        app,
+        _PollService(),
+        interval_seconds=30,
+        snapshot_path=str(tmp_path / "snapshot.json"),
+    )
+
+    assert len(app.router.on_startup) == 1
+    assert len(app.router.on_shutdown) == 1
+
+
+class _FakeQzClient:
+    def __init__(self):
+        self.probes = []
+
+    def probe_cookie_auth(self, *, workspace_id):
+        self.probes.append(workspace_id)
+        return {"list": [], "total": 0}
+
+
+class _FakeQzConfig:
+    def __init__(self, workspace_id):
+        self.workspace_id = workspace_id
+
+
+class _FakeQzProvider:
+    provider_name = "qz_distributed"
+
+    def __init__(self, *, workspace_id):
+        self.client = _FakeQzClient()
+        self.config = _FakeQzConfig(workspace_id)
+
+    def submit(self, manifest):
+        raise AssertionError("heartbeat must not submit provider jobs")
+
+    def get_status(self, provider_job_id):
+        raise AssertionError("heartbeat must not poll provider job status")
+
+    def cancel(self, provider_job_id, reason, actor):
+        raise AssertionError("heartbeat must not cancel provider jobs")
+
+    def get_artifacts(self, provider_job_id):
+        raise AssertionError("heartbeat must not fetch provider artifacts")
+
+
+class _OrderedFakeQzClient:
+    def __init__(self, events):
+        self.events = events
+
+    def probe_cookie_auth(self, *, workspace_id):
+        self.events.append(("probe", workspace_id))
+        return {"list": [], "total": 0}
+
+
+class _OrderedFakeQzProvider(_FakeQzProvider):
+    def __init__(self, *, workspace_id, events):
+        self.client = _OrderedFakeQzClient(events)
+        self.config = _FakeQzConfig(workspace_id)
+
+
+class _StopAfterFirstWait:
+    def __init__(self, events):
+        self.events = events
+
+    def wait(self, interval):
+        self.events.append(("wait", interval))
+        return True
+
+    def set(self):
+        self.events.append("stop")
+
+
+class _InlineThread:
+    def __init__(self, *, target, daemon, name):
+        self.target = target
+        self.daemon = daemon
+        self.name = name
+
+    def start(self):
+        self.target()
+
+    def join(self, timeout):
+        pass
+
+
+class _LifecycleOnlyRouter:
+    def __init__(self):
+        self.on_startup = []
+        self.on_shutdown = []
+
+
+class _LifecycleOnlyApp:
+    def __init__(self):
+        self.state = type("State", (), {})()
+        self.router = _LifecycleOnlyRouter()
+
+
+class _PollService:
+    def admin_poll_active_runs(self):
+        return {"exploratory": [], "final": []}
+
+    def save_state_snapshot(self, path):
+        Path(path).write_text("snapshot\n", encoding="utf-8")
 
 
 def test_provider_poll_iteration_saves_snapshot_after_poll(tmp_path):

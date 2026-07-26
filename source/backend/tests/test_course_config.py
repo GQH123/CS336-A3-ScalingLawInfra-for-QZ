@@ -54,6 +54,8 @@ def _api_config(tmp_path, **overrides):
             "api_base_url": "https://qz.sii.edu.cn",
             "username": "253108120093",
             "password_encrypted": "a" * 256,
+            "cookie_file_path": str(tmp_path / "qz.cookie"),
+            "session_heartbeat_interval_seconds": 900,
             "workspace_id": "workspace-1",
             "project_id": "project-1",
             "compute_group_id": "compute-group-1",
@@ -112,6 +114,8 @@ def test_load_api_config_env_maps_control_node_schema_to_runtime_settings(tmp_pa
     assert values["QZ_WORKER_CONDA_INIT"] == "/opt/anaconda3/etc/profile.d/conda.sh"
     assert values["SCALING_WORKER_EVENT_IMPORT_DIR"].endswith("worker-events")
     assert values["QZ_WORKER_EVENT_LOG_DIR"] == "/shared/course/worker-events"
+    assert values["QZ_COOKIE_FILE"].endswith("qz.cookie")
+    assert values["QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS"] == "900"
     assert values["QZ_IMAGE"] == "registry.example.com/course/scaling-worker:latest"
 
 

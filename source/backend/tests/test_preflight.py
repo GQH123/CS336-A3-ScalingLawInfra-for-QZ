@@ -505,6 +505,67 @@ def test_preflight_qz_probe_uses_cookie_without_cas_credentials(
     }
 
 
+def test_preflight_qz_probe_uses_cookie_file_without_cas_credentials(
+    tmp_path, monkeypatch
+):
+    cookie_file = tmp_path / "qz.cookie"
+    cookie_file.write_text("inspire-session=file-fresh\n", encoding="utf-8")
+    calls = []
+
+    class FakeQzClient:
+        def __init__(self, config):
+            self.config = config
+            self.cookie = cookie_file.read_text(encoding="utf-8").strip()
+
+        def probe_cookie_auth(self, *, workspace_id):
+            calls.append(
+                (
+                    "cookie_file",
+                    self.cookie,
+                    self.config.cookie_file_path,
+                    workspace_id,
+                )
+            )
+            return {"list": [], "total": 0}
+
+        def login_with_cas(self):
+            raise AssertionError("CAS login should not run when QZ_COOKIE_FILE is set")
+
+    monkeypatch.setattr(preflight, "QzClient", FakeQzClient)
+
+    report = preflight.run_preflight(
+        _env(
+            tmp_path,
+            SCALING_PROVIDER="qz_distributed",
+            QZ_API_BASE_URL="https://qz.sii.edu.cn",
+            QZ_COOKIE_FILE=str(cookie_file),
+            QZ_WORKSPACE_ID="ws-1",
+            QZ_PROJECT_ID="project-1",
+            QZ_COMPUTE_GROUP_ID="lcg-1",
+            QZ_SPEC_ID="spec-1",
+            QZ_SPEC_GPU_TYPE="H200",
+            QZ_SPEC_GPU_COUNT="1",
+            QZ_SPEC_CPU_COUNT="15",
+            QZ_SPEC_MEMORY_GB="200",
+            QZ_IMAGE="registry.example.com/scaling-worker:latest",
+        ),
+        create_dirs=True,
+        probe_provider=True,
+    )
+    checks = _by_id(report)
+
+    assert report["ok"] is True
+    assert calls == [
+        ("cookie_file", "inspire-session=file-fresh", str(cookie_file), "ws-1")
+    ]
+    assert checks["provider_environment"]["status"] == "pass"
+    assert checks["provider_probe"]["status"] == "pass"
+    assert checks["provider_probe"]["metadata"] == {
+        "provider": "qz_distributed",
+        "auth": "cookie",
+    }
+
+
 def test_preflight_reports_student_key_csv_errors(tmp_path):
     roster = tmp_path / "bad_student_keys.csv"
     roster.write_text("student,token\nstudent-1,key-1\n", encoding="utf-8")
@@ -549,6 +610,19 @@ def test_preflight_rejects_negative_provider_poll_interval(tmp_path):
     assert report["ok"] is False
     assert checks["budget_settings"]["status"] == "fail"
     assert "SCALING_PROVIDER_POLL_INTERVAL_SECONDS must be non-negative" in checks[
+        "budget_settings"
+    ]["message"]
+
+
+def test_preflight_rejects_negative_qz_session_heartbeat_interval(tmp_path):
+    report = preflight.run_preflight(
+        _env(tmp_path, QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS="-1")
+    )
+    checks = _by_id(report)
+
+    assert report["ok"] is False
+    assert checks["budget_settings"]["status"] == "fail"
+    assert "QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS must be non-negative" in checks[
         "budget_settings"
     ]["message"]
 

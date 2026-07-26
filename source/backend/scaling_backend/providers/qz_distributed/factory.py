@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as _dt
 import os
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Callable
 
 from scaling_backend.providers.qz_distributed.adapter import QzDistributedAdapter
@@ -51,6 +52,7 @@ def build_qz_distributed_adapter_from_env(
             username=_get(values, "QZ_USERNAME", ""),
             password=_get(values, "QZ_PASSWORD_ENCRYPTED", ""),
             cookie=_get(values, "QZ_COOKIE", ""),
+            cookie_file_path=_get(values, "QZ_COOKIE_FILE", ""),
             request_timeout_seconds=_get_positive_int(
                 values, "QZ_REQUEST_TIMEOUT_SECONDS", 60
             ),
@@ -59,6 +61,9 @@ def build_qz_distributed_adapter_from_env(
             ),
             login_max_tries=_get_positive_int(values, "QZ_LOGIN_MAX_TRIES", 3),
             proxy=_get(values, "QZ_PROXY", ""),
+            session_heartbeat_interval_seconds=_get_non_negative_int(
+                values, "QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS", 0
+            ),
         )
     )
     config = QzDistributedConfig(
@@ -111,11 +116,21 @@ def _require(values: Mapping[str, str], key: str) -> str:
 
 def _qz_auth_requirement_error(values: Mapping[str, str]) -> str:
     cookie = _get(values, "QZ_COOKIE", "")
+    cookie_file = _get(values, "QZ_COOKIE_FILE", "")
     username = _get(values, "QZ_USERNAME", "")
     password = _get(values, "QZ_PASSWORD_ENCRYPTED", "")
-    if cookie or (username and password):
+    if cookie or _cookie_file_has_value(cookie_file) or (username and password):
         return ""
-    return "QZ_COOKIE or QZ_USERNAME/QZ_PASSWORD_ENCRYPTED"
+    return "QZ_COOKIE, QZ_COOKIE_FILE, or QZ_USERNAME/QZ_PASSWORD_ENCRYPTED"
+
+
+def _cookie_file_has_value(path: str) -> bool:
+    if not path:
+        return False
+    try:
+        return bool(Path(path).read_text(encoding="utf-8").strip())
+    except OSError:
+        return False
 
 
 def _get(values: Mapping[str, str], key: str, default: str) -> str:

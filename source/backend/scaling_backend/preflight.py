@@ -427,6 +427,7 @@ def _check_budget_settings(values: Mapping[str, str]) -> dict[str, Any]:
         "SCALING_MAX_ACTIVE_EXPERIMENTS_PER_STUDENT",
         "SCALING_MAX_ACTIVE_EXPERIMENTS_GLOBAL",
         "SCALING_PROVIDER_POLL_INTERVAL_SECONDS",
+        "QZ_SESSION_HEARTBEAT_INTERVAL_SECONDS",
     ]
     errors: list[str] = []
     for key in positive:
@@ -665,13 +666,15 @@ def _check_qz_probe(values: Mapping[str, str]) -> dict[str, Any]:
         username=_get(values, "QZ_USERNAME", ""),
         password=_get(values, "QZ_PASSWORD_ENCRYPTED", ""),
         cookie=_get(values, "QZ_COOKIE", ""),
+        cookie_file_path=_get(values, "QZ_COOKIE_FILE", ""),
         request_timeout_seconds=timeout_error,
         login_timeout_seconds=login_timeout_error,
         login_max_tries=max_tries_error,
         proxy=_get(values, "QZ_PROXY", ""),
     )
     client = QzClient(config)
-    if config.cookie:
+    effective_cookie = str(getattr(client, "cookie", config.cookie)).strip()
+    if effective_cookie:
         try:
             client.probe_cookie_auth(workspace_id=_get(values, "QZ_WORKSPACE_ID", ""))
         except Exception as exc:
@@ -718,11 +721,21 @@ def _positive_int_setting(
 
 def _qz_auth_requirement_error(values: Mapping[str, str]) -> str:
     cookie = _get(values, "QZ_COOKIE", "")
+    cookie_file = _get(values, "QZ_COOKIE_FILE", "")
     username = _get(values, "QZ_USERNAME", "")
     password = _get(values, "QZ_PASSWORD_ENCRYPTED", "")
-    if cookie or (username and password):
+    if cookie or _cookie_file_has_value(cookie_file) or (username and password):
         return ""
-    return "QZ_COOKIE or QZ_USERNAME/QZ_PASSWORD_ENCRYPTED"
+    return "QZ_COOKIE, QZ_COOKIE_FILE, or QZ_USERNAME/QZ_PASSWORD_ENCRYPTED"
+
+
+def _cookie_file_has_value(path: str) -> bool:
+    if not path:
+        return False
+    try:
+        return bool(Path(path).read_text(encoding="utf-8").strip())
+    except OSError:
+        return False
 
 
 def _run_command(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
